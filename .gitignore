@@ -1,0 +1,49 @@
+# --- Terraform ---
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
+.terraform.lock.hcl
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+.env
+build/
+dist/
+*.egg-info/
+modsec-learn/
+
+# --- ModSecurity & ML ---
+# Không nên push bộ luật CRS (nặng và nên clone riêng)
+modsec-learn/coreruleset/
+
+# Không nên push các kết quả thử nghiệm (PDF, PNG)
+modsec-learn/data/figures/*.pdf
+modsec-learn/data/figures/*.png
+
+# Không nên push các file model lớn (tùy chọn)
+# modsec-learn/data/models/*.joblib
+
+# Loại bỏ các file dataset thô (thường rất nặng)
+modsec-learn/data/dataset/*.json
+# Ngoại trừ các file cấu hình quan trọng
+!modsec-learn/data/crs_sqli_ids_4.0.0.json
+!modsec-learn/data/crs_sqli_weights_4.0.0.json
+
+# --- Hệ điều hành & IDE ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Logs ---
+*.log
+modsec_config/debug.log

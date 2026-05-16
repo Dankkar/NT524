@@ -1,0 +1,4 @@
+source ~/kolla-venv/bin/activate
+source /etc/kolla/admin-openrc.sh
+
+source ~/modsec-ai-venv/bin/activate

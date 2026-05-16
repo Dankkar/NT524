@@ -1,0 +1,97 @@
+terraform {
+  required_providers {
+    openstack = {
+      source = "terraform-provider-openstack/openstack"
+    }
+  }
+}
+resource "openstack_compute_keypair_v2" "my_key" {
+  name       = "vpn_key"
+  public_key = file("~/.ssh/openstack_key.pub")
+}
+
+resource "openstack_compute_instance_v2" "app_node" {
+  name            = "app-node"
+  image_name      = "ubuntu-24.04"
+  flavor_name     = "m1.small"
+  key_pair        = openstack_compute_keypair_v2.my_key.name
+  security_groups = [var.app_sg_id]
+
+  network {
+    uuid = var.app_network_id
+  }
+
+  # Đảm bảo VPN Gateway được tạo trước để cấu hình NAT xong xuôi
+  depends_on = [openstack_compute_instance_v2.vpn_gateway]
+
+  user_data = <<-EOF
+                #!/bin/bash
+                sleep 30
+                ip route del 8.8.8.8 || true
+                ip route del 8.8.4.4 || true
+                
+                ip route del default || true
+                ip route add default via 10.0.1.254
+                
+                echo "nameserver 8.8.8.8" > /etc/resolv.conf
+
+                apt-get update
+                apt-get install -y docker.io docker-compose
+                systemctl start docker
+                systemctl enable docker
+                docker run -d -p 80:3000 --name juiceshop bkimminich/juice-shop
+                EOF
+}
+
+resource "openstack_networking_port_v2" "vpn_app_port" {
+  name               = "vpn_app_port"
+  network_id         = var.app_network_id
+  security_group_ids = [var.vpn_sg_id]
+
+  fixed_ip {
+    subnet_id  = var.app_subnet_id
+    ip_address = "10.0.1.254"
+  }
+
+  allowed_address_pairs {
+    ip_address = "0.0.0.0/0"
+  }
+}
+
+resource "openstack_compute_instance_v2" "vpn_gateway" {
+  name            = "vpn-gateway"
+  image_name      = "ubuntu-24.04"
+  flavor_name     = "m1.small"
+  key_pair        = openstack_compute_keypair_v2.my_key.name
+  security_groups = [var.vpn_sg_id]
+
+  # Mạng ra Internet (interface mặc định thường là ens3)
+  network {
+    uuid = var.network_id
+  }
+
+  # Mạng private kết nối với app_node (Sử dụng Port có cấu hình allowed_address_pairs)
+  network {
+    port = openstack_networking_port_v2.vpn_app_port.id
+  }
+
+  user_data = <<-EOF
+              #!/bin/bash
+              echo "nameserver 8.8.8.8" > /etc/resolv.conf
+              ip route del 8.8.8.8 || true
+              ip route del 8.8.4.4 || true
+
+              apt-get update
+              apt-get install -y wireguard iptables iptables-persistent
+              
+              echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+              sysctl -p
+              iptables -t nat -A POSTROUTING -o ens3 -j MASQUERADE
+              netfilter-persistent save
+              EOF
+}
+
+resource "openstack_compute_floatingip_associate_v2" "fip_assoc" {
+  floating_ip = var.floating_ip
+  instance_id = openstack_compute_instance_v2.vpn_gateway.id
+}
