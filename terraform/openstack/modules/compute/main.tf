@@ -7,12 +7,12 @@ terraform {
 }
 resource "openstack_compute_keypair_v2" "my_key" {
   name       = "vpn_key"
-  public_key = file("~/.ssh/vpn_key.pub")
+  public_key = file("~/.ssh/openstack_key.pub")
 }
 
 resource "openstack_compute_instance_v2" "app_node" {
   name            = "app-node"
-  image_name      = "ubuntu22.04"
+  image_name      = "ubuntu-24.04"
   flavor_name     = "m1.small"
   key_pair        = openstack_compute_keypair_v2.my_key.name
   security_groups = [var.app_sg_id]
@@ -60,7 +60,7 @@ resource "openstack_networking_port_v2" "vpn_app_port" {
 
 resource "openstack_compute_instance_v2" "vpn_gateway" {
   name            = "vpn-gateway"
-  image_name      = "ubuntu22.04"
+  image_name      = "ubuntu-24.04"
   flavor_name     = "m1.small"
   key_pair        = openstack_compute_keypair_v2.my_key.name
   security_groups = [var.vpn_sg_id]
