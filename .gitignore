@@ -6,6 +6,20 @@
 *.tfvars.json
 .terraform.lock.hcl
 
+# --- Ansible ---
+*.retry
+.ansible/
+ansible/.cache/
+ansible/tmp/
+ansible/**/vault*.yml
+ansible/**/vault*.yaml
+ansible/inventories/**/hosts.yml
+ansible/inventories/**/hosts.yaml
+ansible/inventories/**/hosts.local.yml
+ansible/inventories/**/hosts.local.yaml
+!ansible/inventories/**/hosts.example.yml
+!ansible/inventories/**/hosts.example.yaml
+
 # --- Python ---
 __pycache__/
 *.py[cod]
