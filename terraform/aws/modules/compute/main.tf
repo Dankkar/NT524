@@ -33,7 +33,9 @@ resource "aws_instance" "vpn_gateway" {
   user_data = <<-EOF
               #!/bin/bash
               apt-get update
-              apt-get install -y wireguard iptables iptables-persistent
+              echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+              echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+              DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard iptables iptables-persistent
               
               echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
               sysctl -p

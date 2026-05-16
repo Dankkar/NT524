@@ -1,4 +1,42 @@
 ---
+- name: Ensure local hostname resolves
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s+'
+    line: "127.0.1.1 {{ ansible_hostname }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Wait for cloud-init to finish
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'if command -v cloud-init >/dev/null 2>&1; then cloud-init status --wait; fi'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Wait for apt/dpkg locks
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'while command -v fuser >/dev/null 2>&1 &&
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+    /var/cache/apt/archives/lock /var/lib/apt/lists/lock >/dev/null 2>&1;
+    do sleep 5; done'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Preseed iptables-persistent prompts
+  ansible.builtin.shell: |
+    printf '%s\n' \
+      'iptables-persistent iptables-persistent/autosave_v4 boolean true' \
+      'iptables-persistent iptables-persistent/autosave_v6 boolean true' |
+    debconf-set-selections
+  args:
+    executable: /bin/bash
+  changed_when: false
+
 - name: Install VPN packages
   ansible.builtin.apt:
     name:
@@ -6,7 +44,7 @@
       - iptables
       - iptables-persistent
     state: present
-    update_cache: true
+    lock_timeout: 600
   environment:
     DEBIAN_FRONTEND: noninteractive
 
@@ -118,31 +156,32 @@
     - inventory_hostname in groups.openstack_vpn
     - wireguard_openstack_app_nat | bool
 
-- name: Check OpenStack app NAT rule
+- name: Check OpenStack app NAT rules
   ansible.builtin.command: >-
     iptables -t nat -C POSTROUTING
-    -s {{ aws_vpc_cidr }}
+    -s {{ item }}
     -d {{ openstack_app_cidr }}
     -o {{ openstack_app_interface }}
     -j MASQUERADE
-  register: openstack_app_nat_check
+  loop: "{{ wireguard_openstack_app_nat_source_cidrs }}"
+  register: openstack_app_nat_checks
   changed_when: false
-  failed_when: openstack_app_nat_check.rc not in [0, 1]
+  failed_when: openstack_app_nat_checks.rc not in [0, 1]
   when:
     - inventory_hostname in groups.openstack_vpn
     - wireguard_openstack_app_nat | bool
 
-- name: Add OpenStack app NAT rule
+- name: Add OpenStack app NAT rules
   ansible.builtin.command: >-
     iptables -t nat -A POSTROUTING
-    -s {{ aws_vpc_cidr }}
+    -s {{ item.item }}
     -d {{ openstack_app_cidr }}
     -o {{ openstack_app_interface }}
     -j MASQUERADE
+  loop: "{{ openstack_app_nat_checks.results | selectattr('rc', 'equalto', 1) | list }}"
   when:
     - inventory_hostname in groups.openstack_vpn
     - wireguard_openstack_app_nat | bool
-    - openstack_app_nat_check.rc == 1
 
 - name: Persist iptables rules
   ansible.builtin.command: netfilter-persistent save

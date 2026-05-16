@@ -1,0 +1,11 @@
+---
+- name: Deploy WAF reverse proxy node
+  hosts: waf_nodes
+  become: true
+  gather_facts: true
+  vars:
+    filebeat_node_role: waf
+    filebeat_inputs: "{{ filebeat_waf_inputs }}"
+  roles:
+    - nginx_waf
+    - filebeat_agent

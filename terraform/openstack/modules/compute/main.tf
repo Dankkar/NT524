@@ -34,12 +34,6 @@ resource "openstack_compute_instance_v2" "app_node" {
                 ip route add default via 10.0.1.254
                 
                 echo "nameserver 8.8.8.8" > /etc/resolv.conf
-
-                apt-get update
-                apt-get install -y docker.io docker-compose
-                systemctl start docker
-                systemctl enable docker
-                docker run -d -p 80:3000 --name juiceshop bkimminich/juice-shop
                 EOF
 }
 
@@ -82,7 +76,9 @@ resource "openstack_compute_instance_v2" "vpn_gateway" {
               ip route del 8.8.4.4 || true
 
               apt-get update
-              apt-get install -y wireguard iptables iptables-persistent
+              echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+              echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+              DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard iptables iptables-persistent
               
               echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
               sysctl -p

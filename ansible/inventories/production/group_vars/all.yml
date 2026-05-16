@@ -2,13 +2,62 @@
 aws_vpc_cidr: 172.31.0.0/16
 openstack_app_cidr: 10.0.1.0/24
 openstack_vpn_app_ip: 10.0.1.254
+wireguard_cidr: 10.200.0.0/24
 
 wireguard_interface: wg0
 wireguard_port: 51820
 wireguard_config_dir: /etc/wireguard
 wireguard_private_key_path: /etc/wireguard/privatekey
 wireguard_persistent_keepalive: 25
+ansible_become_timeout: 60
 
 # Keep this enabled while the OpenStack app security group allows traffic via
 # the VPN gateway path during testing.
 wireguard_openstack_app_nat: true
+wireguard_openstack_app_nat_source_cidrs:
+  - "{{ aws_vpc_cidr }}"
+  - "{{ wireguard_cidr }}"
+
+app_backend_host: 10.0.1.39
+app_backend_port: 80
+juice_shop_image: bkimminich/juice-shop
+juice_shop_container_name: juiceshop
+juice_shop_host_port: 80
+juice_shop_container_port: 3000
+
+nginx_server_name: _
+nginx_access_log: /var/log/nginx/access.log
+nginx_error_log: /var/log/nginx/error.log
+
+elastic_stack_major_version: "8.x"
+logstash_host: 172.10.10.1
+logstash_port: 5044
+filebeat_service_enabled: true
+
+filebeat_waf_inputs:
+  - id: nginx-access
+    paths:
+      - "{{ nginx_access_log }}"
+    fields:
+      log_type: nginx_access
+      node_role: waf
+  - id: nginx-error
+    paths:
+      - "{{ nginx_error_log }}"
+    fields:
+      log_type: nginx_error
+      node_role: waf
+
+filebeat_app_inputs:
+  - id: docker-containers
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    fields:
+      log_type: docker_container
+      node_role: app
+  - id: syslog
+    paths:
+      - /var/log/syslog
+    fields:
+      log_type: syslog
+      node_role: app

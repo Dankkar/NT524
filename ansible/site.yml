@@ -1,2 +1,4 @@
 ---
 - import_playbook: network_vpn.yml
+- import_playbook: app.yml
+- import_playbook: waf.yml

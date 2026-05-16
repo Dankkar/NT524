@@ -1,0 +1,70 @@
+---
+- name: Wait for cloud-init to finish
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'if command -v cloud-init >/dev/null 2>&1; then
+    cloud-init status --wait || cloud-init status | grep -q "status: error";
+    fi'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Wait for apt/dpkg locks
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'while command -v fuser >/dev/null 2>&1 &&
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+    /var/cache/apt/archives/lock /var/lib/apt/lists/lock >/dev/null 2>&1;
+    do sleep 5; done'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Force apt to use IPv4
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/99force-ipv4
+    content: 'Acquire::ForceIPv4 "true";'
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install Nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+    update_cache: true
+    lock_timeout: 600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Configure Juice Shop reverse proxy
+  ansible.builtin.template:
+    src: juice_shop_proxy.conf.j2
+    dest: /etc/nginx/sites-available/juice-shop.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Nginx
+
+- name: Enable Juice Shop reverse proxy site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/juice-shop.conf
+    dest: /etc/nginx/sites-enabled/juice-shop.conf
+    state: link
+  notify: Reload Nginx
+
+- name: Disable default Nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload Nginx
+
+- name: Validate Nginx config
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Enable Nginx service
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started

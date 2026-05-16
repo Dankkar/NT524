@@ -1,0 +1,11 @@
+---
+- name: Deploy Juice Shop app node
+  hosts: app_nodes
+  become: true
+  gather_facts: true
+  vars:
+    filebeat_node_role: app
+    filebeat_inputs: "{{ filebeat_app_inputs }}"
+  roles:
+    - juice_shop_app
+    - filebeat_agent

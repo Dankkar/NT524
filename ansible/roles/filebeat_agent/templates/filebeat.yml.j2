@@ -1,0 +1,23 @@
+filebeat.inputs:
+{% for input in filebeat_inputs %}
+  - type: filestream
+    id: {{ filebeat_node_role }}-{{ input.id }}
+    enabled: true
+    paths:
+{% for path in input.paths %}
+      - {{ path }}
+{% endfor %}
+    fields:
+      deployment: siem-hybrid
+      node_role: {{ input.fields.node_role }}
+      log_type: {{ input.fields.log_type }}
+    fields_under_root: false
+{% endfor %}
+
+processors:
+  - add_host_metadata: {}
+  - add_cloud_metadata: {}
+
+output.logstash:
+  hosts:
+    - "{{ logstash_host }}:{{ logstash_port }}"
