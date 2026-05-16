@@ -23,10 +23,10 @@ source /etc/kolla/admin-openrc.sh
 ```
 
 ### 2.2. Tạo SSH Key
-Terraform sẽ sử dụng file key tại `~/.ssh/vpn_key.pub` để đẩy lên OpenStack.
+Terraform sẽ sử dụng file key tại `/.ssh/openstack_key.pub` để đẩy lên OpenStack.
 ```bash
 # Tạo cặp key mới nếu chưa có
-ssh-keygen -t rsa -b 4096 -f ~/.ssh/vpn_key
+ssh-keygen -t ed25519 -f ~/.ssh/openstack_key -N ""
 ```
 
 ### 2.3. Tạo Image, Flavor và Public Network
@@ -34,7 +34,11 @@ Nếu OpenStack của bạn chưa có sẵn, hãy chạy các lệnh sau:
 
 **Tạo Image:**
 ```bash
-openstack image create --disk-format qcow2 --container-format bare --file /path/to/ubuntu-22.04.qcow2 "ubuntu22.04"
+# Download Ubuntu cloud image
+wget https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -O ubuntu-24.04.img
+
+# Upload image
+openstack image create "Ubuntu-24.04" --file ubuntu-24.04.img --disk-format qcow2 --container-format bare --public
 ```
 
 **Tạo Flavor:**
@@ -42,12 +46,28 @@ openstack image create --disk-format qcow2 --container-format bare --file /path/
 openstack flavor create --id auto --ram 2048 --disk 20 --vcpus 2 m1.small
 ```
 
-**Tạo Public Network (External):**
+**Tạo Mạng Provider (External):**
+
 ```bash
-openstack network create --external --provider-physical-network physnet1 --provider-network-type flat public1
-openstack subnet create --network public1 --subnet-range 192.168.100.0/24 --gateway 192.168.100.1 --allocation-pool start=192.168.100.200,end=192.168.100.250 public_subnet
+# Tạo external network (provider network)
+
+openstack network create public-net \
+  --external \
+  --provider-physical-network physnet1 \
+  --provider-network-type flat \
+  --share
+  
+# Tạo subnet cho external network
+openstack subnet create public-subnet \
+  --network public-net \
+  --subnet-range 172.10.10.0/24 \
+  --gateway 172.10.10.1 \
+  --allocation-pool start=172.10.10.200,end=172.10.10.250 \
+  --dns-nameserver 8.8.8.8 \
+  --no-dhcp
 ```
-*Lưu ý: Lấy ID của `public1` để điền vào `external_network_id` trong `terraform.tfvars`.*
+
+*Lưu ý: Lấy ID của `public-net` để điền vào `external_network_id` trong `terraform.tfvars`.*
 
 ## 3. Các bước triển khai với Terraform
 
@@ -71,7 +91,7 @@ openstack server list
 ### 4.2. Truy cập SSH vào VPN Gateway
 Sử dụng Floating IP để SSH vào máy chủ VPN:
 ```bash
-ssh -i ~/.ssh/vpn_key ubuntu@<FLOATING_IP_GATEWAY> -J ubuntu@<IP_appnode>
+ssh -i /.ssh/openstack_key ubuntu@<FLOATING_IP_GATEWAY> -J ubuntu@<IP_appnode>
 ```
 
 # Kiểm tra đã cài Docker chưa

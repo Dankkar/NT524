@@ -1,4 +1,3 @@
-
 source ~/kolla-venv/bin/activate
 cd /etc/kolla/ansible/inventory/
 source /etc/kolla/admin-openrc.sh

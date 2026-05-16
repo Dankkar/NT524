@@ -1,60 +1,132 @@
+# 1. Install Tools & Dependencies
 
-<!-- #install tools -->
+```bash
 sudo apt update && sudo apt install open-vm-tools open-vm-tools-desktop
 
-
 sudo apt update && sudo apt upgrade -y && sudo apt install -y build-essential git cmake pkg-config libpcre3-dev libxml2 libxml2-dev libyajl-dev liblmdb-dev libtool automake autoconf make gcc g++ python3 python3-venv python3-pip wget unzip
+```
 
-cd ~ && git clone https://github.com/pralab/modsec-learn.git && cd modsec-learn && ls -la
+# 2. Clone modsec-learn
 
-cd $HOME && git clone --branch v3.0.10 https://github.com/SpiderLabs/ModSecurity && cd ModSecurity && git submodule init && git submodule update
+```bash
+cd ~ 
+git clone https://github.com/pralab/modsec-learn.git 
+cd modsec-learn && ls -la
+```
 
-cd ~/ModSecurity && ./build.sh && ./configure && make -j$(nproc) && sudo make install
+# 3. Install & Build ModSecurity (Core Engine)
 
+```bash
+# Clone source code
+cd ~
+git clone --branch v3.0.10 https://github.com/SpiderLabs/ModSecurity
+cd ModSecurity
+
+# Khởi tạo submodule
+git submodule init
+git submodule update
+
+# Build và cài đặt
+./build.sh
+./configure
+make -j$(nproc)
+sudo make install
+```
+
+# 4. Config Shared Library & Update Linker Path
+
+```bash
+# Liên kết thư viện động
 sudo sh -c 'echo "/usr/local/modsecurity/lib" > /etc/ld.so.conf.d/modsecurity.conf'
 sudo ldconfig
 ldconfig -p | grep modsecurity
 
+# > Phải trả về
+kali@kali-virtual-machine:~/ModSecurity$ ldconfig -p | grep modsecurity 
+libmodsecurity.so.3 (libc6,x86-64) => /usr/local/modsecurity/lib/libmodsecurity.so.3 
+libmodsecurity.so (libc6,x86-64) => /usr/local/modsecurity/lib/libmodsecurity.so 
+kali@kali-virtual-machine:~/ModSecurity$
 
-<!-- #phải trả về -->
-<!-- kali@kali-virtual-machine:~/ModSecurity$ ldconfig -p | grep modsecurity libmodsecurity.so.3 (libc6,x86-64) => /usr/local/modsecurity/lib/libmodsecurity.so.3 libmodsecurity.so (libc6,x86-64) => /usr/local/modsecurity/lib/libmodsecurity.so kali@kali-virtual-machine:~/ModSecurity$ -->
+# Thiết đặt biến môi trường để Python  
+export MODSECURITY_INC=/usr/local/modsecurity/include
+export MODSECURITY_LIB=/usr/local/modsecurity/lib
 
+# Lưu vĩnh viễn vào ~/.bashrc
+echo 'export MODSECURITY_INC=/usr/local/modsecurity/include' >> ~/.bashrc
+echo 'export MODSECURITY_LIB=/usr/local/modsecurity/lib' >> ~/.bashrc
+```
 
-<!-- Thiết đặt biến môi trường để Python  -->
-export MODSECURITY_INC=/usr/local/modsecurity/include && export MODSECURITY_LIB=/usr/local/modsecurity/lib
-echo 'export MODSECURITY_INC=/usr/local/modsecurity/include' >> ~/.bashrc && echo 'export MODSECURITY_LIB=/usr/local/modsecurity/lib' >> ~/.bashrc
+# 5. Install Python Bindings (PyModSecurity) with Virtualenv
 
+```bash
+# Xoá thư mục cũ (nếu có) và clone pymodsecurity
+cd ~ 
+rm -rf pymodsecurity 
+git clone --recurse-submodules https://github.com/AvalZ/pymodsecurity.git 
+cd pymodsecurity
 
+# Tạo môi trường ảo Python riêng biệt cho AI model
+python3 -m venv ~/modsec-ai-venv 
 
-<!-- Clone fork pymodsecurity & install -->
-cd ~ && rm -rf pymodsecurity && git clone --recurse-submodules https://github.com/AvalZ/pymodsecurity.git && cd pymodsecurity
-python3 -m venv ~/modsec-ai-venv && source ~/modsec-ai-venv/bin/activate && pip install --upgrade pip setuptools wheel && pip install --upgrade pybind11
-export MODSECURITY_INC=/usr/local/modsecurity/include && export MODSECURITY_LIB=/usr/local/modsecurity/lib && python3 setup.py build && python3 setup.py install
+# Kích hoạt môi trường và cập nhật pip, pybind11
+source ~/modsec-ai-venv/bin/activate 
+pip install --upgrade pip setuptools wheel 
+pip install --upgrade pybind11
+
+# Build và cài đặt thư viện vào trong môi trường ảo
+python3 setup.py build 
+python3 setup.py install
+
+# Kiểm tra kết quả cài đặt
 python3 -c "try:
     import ModSecurity
     print('Imported ModSecurity OK')
 except Exception as e:
     print('Import ModSecurity failed:', e)"
+```
 
-<!-- #neu kiem tra ok thi pymodsec cai duoc r -->
-python3 - <<EOF
-from ModSecurity import ModSecurity, Rules, Transaction
-print("Bindings working, ModSecurity version:", ModSecurity().whoAmI())
-EOF
+# 6. OWASP Core Rule Set (CRS)
 
+> CRS = OWASP Core Rule Set, phiên bản mà bài báo dùng là v4.0.0.
 
-<!-- Clone bộ luật CRS**
-
-CRS = OWASP Core Rule Set, phiên bản mà bài báo dùng là v4.0.0.  -->
+```bash
 cd ~
 git clone --branch v4.0.0 https://github.com/coreruleset/coreruleset.git
+```
 
+# 7. Instal Python Dependencies & Run the scripts
 
-<!-- nhớ mở terminal mới -->
+> Nhớ mở terminal mới
 
-cd ~/Downloads/Project/modsec-learn && source ~/modsec-ai-venv/bin/activate && pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
-cd ~/pymodsecurity && pip install .
-mv ~/coreruleset ~/Downloads/Project/modsec-learn/
-cd ~/Downloads/Project/modsec-learn/scripts && python3 scripts/run_training.py
+```bash
+# Mở môi trường ảo (nếu bạn đã đóng terminal trước đó)
+source ~/modsec-ai-venv/bin/activate
 
+# Vào thư mục dự án và cài thư viện requirements
+cd ~/modsec-learn
+pip install -r requirements.txt
 
+# Cài đặt lại module pymodsecurity từ thư mục mã nguồn 
+cd ~/pymodsecurity 
+pip install .
+
+# Đưa bộ dữ liệu OWASP CRS vào trong thư mục modsec-learn để model đọc
+mv ~/coreruleset ~/modsec-learn/
+
+# Chạy tệp training mô hình AI
+cd ~/modsec-learn
+python3 scripts/run_training.py
+```
+
+# 8. Link with Openstack venv (Optional)
+
+Nếu mô hình SIEM/WAF này được chạy trên nền tảng máy ảo OpenStack, trước khi kích hoạt ảo hoá AI, bạn cần chạy source môi trường của Kolla (Ansible) để nạp các kết nối admin OpenStack:
+
+```bash
+source ~/kolla-venv/bin/activate
+cd /etc/kolla/ansible/inventory/
+source /etc/kolla/admin-openrc.sh
+
+source ~/modsec-ai-venv/bin/activate
+# và chạy các script python của modsec-learn...
+```
