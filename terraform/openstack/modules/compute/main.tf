@@ -65,7 +65,7 @@ resource "openstack_compute_instance_v2" "vpn_gateway" {
   key_pair        = openstack_compute_keypair_v2.my_key.name
   security_groups = [var.vpn_sg_id]
 
-  # Mạng ra Internet (interface mặc định thường là ens3)
+  # Mạng ra Internet
   network {
     uuid = var.network_id
   }
@@ -86,7 +86,8 @@ resource "openstack_compute_instance_v2" "vpn_gateway" {
               
               echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
               sysctl -p
-              iptables -t nat -A POSTROUTING -o ens3 -j MASQUERADE
+              DEFAULT_IFACE=$(ip route show default | awk '{print $5; exit}')
+              iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
               netfilter-persistent save
               EOF
 }

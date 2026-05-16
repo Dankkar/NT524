@@ -1,0 +1,11 @@
+[Interface]
+Address = {{ wireguard_address }}/24
+ListenPort = {{ wireguard_port }}
+PrivateKey = {{ wireguard_private_key }}
+SaveConfig = false
+
+[Peer]
+PublicKey = {{ hostvars[wireguard_peer_host].wireguard_public_key }}
+AllowedIPs = {{ wireguard_peer_allowed_ips | join(', ') }}
+Endpoint = {{ hostvars[wireguard_peer_host].ansible_host }}:{{ wireguard_port }}
+PersistentKeepalive = {{ wireguard_persistent_keepalive }}

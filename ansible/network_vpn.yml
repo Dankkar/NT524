@@ -1,0 +1,7 @@
+---
+- name: Configure hybrid WireGuard VPN gateways
+  hosts: vpn_gateways
+  become: true
+  gather_facts: true
+  roles:
+    - wireguard_gateway
