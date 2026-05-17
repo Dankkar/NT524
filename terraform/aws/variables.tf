@@ -29,7 +29,7 @@ variable "openstack_app_cidr" {
 
 variable "openstack_vpn_public_cidr" {
   type        = string
-  description = "OpenStack VPN public floating IP allowed to access AWS WireGuard, in CIDR form such as x.x.x.x/32."
+  description = "Real public source CIDR allowed to access AWS WireGuard. For laptop OpenStack AIO, this is the WAN/NAT public IP as x.x.x.x/32, not the 172.10.10.x floating IP."
 }
 
 variable "public_key_path" {

@@ -1,0 +1,7 @@
+---
+- name: Deploy Logstash on OpenStack VPN node
+  hosts: openstack_vpn
+  become: true
+  gather_facts: true
+  roles:
+    - logstash_forwarder

@@ -41,11 +41,12 @@ sudo sh -c 'echo "/usr/local/modsecurity/lib" > /etc/ld.so.conf.d/modsecurity.co
 sudo ldconfig
 ldconfig -p | grep modsecurity
 
-# > Phải trả về
-kali@kali-virtual-machine:~/ModSecurity$ ldconfig -p | grep modsecurity 
-libmodsecurity.so.3 (libc6,x86-64) => /usr/local/modsecurity/lib/libmodsecurity.so.3 
-libmodsecurity.so (libc6,x86-64) => /usr/local/modsecurity/lib/libmodsecurity.so 
-kali@kali-virtual-machine:~/ModSecurity$
+> Nếu thành công
+nhatnguyen@openstack-aio:~/ModSecurity$ sudo sh -c 'echo "/usr/local/modsecurity/lib" > /etc/ld.so.conf.d/modsecurity.conf'
+nhatnguyen@openstack-aio:~/ModSecurity$ sudo ldconfig
+nhatnguyen@openstack-aio:~/ModSecurity$ ldconfig -p | grep modsecurity
+	libmodsecurity.so.3 (libc6,x86-64) => /usr/local/modsecurity/lib/libmodsecurity.so.3
+	libmodsecurity.so (libc6,x86-64) => /usr/local/modsecurity/lib/libmodsecurity.so
 
 # Thiết đặt biến môi trường để Python  
 export MODSECURITY_INC=/usr/local/modsecurity/include
@@ -104,6 +105,9 @@ source ~/modsec-ai-venv/bin/activate
 
 # Vào thư mục dự án và cài thư viện requirements
 cd ~/modsec-learn
+# Nếu dùng Python 3.12, pandas 1.3.5 quá cũ và sẽ bị build lỗi.
+# Cập nhật pandas trong requirements.txt lên bản có wheel cho Python 3.12.
+sed -i 's/^pandas==1\.3\.5$/pandas==2.2.3/' requirements.txt
 pip install -r requirements.txt
 
 # Cài đặt lại module pymodsecurity từ thư mục mã nguồn 
@@ -115,7 +119,13 @@ mv ~/coreruleset ~/modsec-learn/
 
 # Chạy tệp training mô hình AI
 cd ~/modsec-learn
+# Nếu gặp lỗi LinearSVC với penalty='l1' và dual=True trên scikit-learn mới, sửa scripts/run_training.py: thêm `dual = False` vào LinearSVC(...).
+# Việc sửa dual=False chỉ làm cấu hình LinearSVC hợp lệ với scikit-learn mới; output prediction trên test set vẫn giống model gốc.
 python3 scripts/run_training.py
+
+# Kiểm tra
+ls -l ~/modsec-learn/data/models
+
 ```
 
 # 8. Link with Openstack venv (Optional)

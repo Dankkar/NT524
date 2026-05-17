@@ -18,7 +18,7 @@ wireguard_openstack_app_nat_source_cidrs:
   - "{{ aws_vpc_cidr }}"
   - "{{ wireguard_cidr }}"
 
-app_backend_host: 10.0.1.39
+app_backend_host: 10.0.1.245
 app_backend_port: 80
 juice_shop_image: bkimminich/juice-shop
 juice_shop_container_name: juiceshop
@@ -30,8 +30,10 @@ nginx_access_log: /var/log/nginx/access.log
 nginx_error_log: /var/log/nginx/error.log
 
 elastic_stack_major_version: "8.x"
-logstash_host: 172.10.10.1
+logstash_host: "{{ openstack_vpn_app_ip }}"
 logstash_port: 5044
+elasticsearch_host: 172.10.10.1
+elasticsearch_port: 9200
 filebeat_service_enabled: true
 
 filebeat_waf_inputs:

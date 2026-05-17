@@ -65,6 +65,14 @@ docker-compose.override.yml
 .docker/
 data/
 volumes/
+elk/.env
+elk/*.local
+elk/*.pid
+elk/logs/
+elk/logstash/
+elk/exports/
+elk/tmp/
+elk/snapshots/
 
 # --- ModSecurity & ML ---
 # Không nên push bộ luật CRS (nặng và nên clone riêng)
@@ -103,3 +111,9 @@ modsec-learn/data/dataset/*.json
 *.log
 logs/
 modsec_config/debug.log
+
+# --- Local SIEM generated artifacts ---
+exports/
+reports/generated/
+*.pid
+*.sock
