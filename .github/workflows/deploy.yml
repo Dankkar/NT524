@@ -1,0 +1,97 @@
+name: DevSecOps WAF CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+    # PREVENT INFINITE LOOP: Ignore push triggers if only rules or ML files change
+    paths-ignore:
+      - 'ansible/roles/nginx_waf/files/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf'
+      - 'modsec-learn/**'
+      - '**.md'
+
+# Permissions required to request JWT tokens from AWS OIDC Identity Provider
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build, Scan & Push to ECR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # Quét lỗi lỗ hổng tĩnh (SAST) trên mã nguồn của WAF
+      - name: Static Application Security Testing (SAST)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+
+      # Đăng nhập AWS sử dụng OIDC Role ARN (An toàn tuyệt đối, không dùng Access Keys)
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-southeast-1
+          audience: sts.amazonaws.com
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Biên dịch ModSecurity và Nginx Connector cực nhanh trên máy ảo GitHub (chỉ mất 2-3 phút)
+      - name: Build WAF Docker Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: my-waf-nginx
+          IMAGE_TAG: latest
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ansible/roles/nginx_waf/files/Dockerfile ansible/roles/nginx_waf/files/
+
+      # Quét lỗ hổng bảo mật của Docker Image vừa build bằng Trivy trước khi đẩy lên
+      - name: Container Image Vulnerability Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/my-waf-nginx:latest
+          format: 'table'
+          exit-code: '1' # Dừng Pipeline ngay lập tức nếu phát hiện lỗi nguy hiểm (CRITICAL)
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      # Đẩy Image sạch lên AWS ECR
+      - name: Push Image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: my-waf-nginx
+          IMAGE_TAG: latest
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+  deploy:
+    name: Trigger Deploy via SSH & Ansible
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy on AWS WAF Node via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_WAF_HOST }} # IP Public của AWS WAF Node
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }} # Private SSH Key để kết nối
+          script: |
+            # Clone/Sync tệp cấu hình mới nhất sang thư mục Deploy
+            # (Hoặc kéo repository mới nhất từ Git về Host)
+            # Ở đây chúng ta chạy trực tiếp các lệnh Docker Compose kéo và chạy WAF
+            
+            # Đăng nhập ECR trực tiếp bằng IAM Instance Profile gắn sẵn trên EC2
+            aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com
+            
+            # Di chuyển vào thư mục deploy WAF trên EC2
+            cd /opt/waf-nginx
+            
+            # Kéo Image WAF mới nhất về và kích hoạt
+            docker compose pull
+            docker compose up -d

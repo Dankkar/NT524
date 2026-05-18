@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  waf-nginx:
+    image: "{{ waf_image }}"
+    container_name: waf-nginx
+    network_mode: host
+    restart: always
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./juice_shop_proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./modsec/main.conf:/etc/nginx/modsec/main.conf:ro
+      - ./modsec/modsecurity.conf:/etc/nginx/modsec/modsecurity.conf:ro
+      - ./modsec/unicode.mapping:/etc/nginx/modsec/unicode.mapping:ro
+      - ./modsec/crs-setup.conf:/etc/nginx/modsec/crs-setup.conf:ro
+      # Mount rules directory so Ansible/MLOps pipeline can hot-update exclusions
+      - ./modsec/rules:/etc/nginx/modsec/rules
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

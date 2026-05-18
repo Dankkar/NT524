@@ -28,43 +28,215 @@
     group: root
     mode: "0644"
 
-- name: Install Nginx
-  ansible.builtin.apt:
+# --- CLEAN UP NATIVE NGINX INSTALLATION ---
+
+- name: Stop and disable native Nginx service
+  ansible.builtin.systemd:
     name: nginx
+    state: stopped
+    enabled: false
+  ignore_errors: true
+
+- name: Uninstall native Nginx to free up port 80/443
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - nginx-common
+      - nginx-core
+    state: absent
+    purge: true
+  ignore_errors: true
+
+- name: Remove native Nginx directories
+  ansible.builtin.file:
+    path: /etc/nginx
+    state: absent
+
+# --- INSTALL DOCKER AND DOCKER COMPOSE ---
+
+- name: Install Docker GPG key and dependencies
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - git
     state: present
     update_cache: true
-    lock_timeout: 600
-  environment:
-    DEBIAN_FRONTEND: noninteractive
 
-- name: Configure Juice Shop reverse proxy
-  ansible.builtin.template:
-    src: juice_shop_proxy.conf.j2
-    dest: /etc/nginx/sites-available/juice-shop.conf
+- name: Create Docker keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download Docker GPG key
+  ansible.builtin.apt_key:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    state: present
+    keyring: /etc/apt/keyrings/docker.gpg
+
+- name: Add Docker repository
+  ansible.builtin.apt_repository:
+    repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    state: present
+
+- name: Install Docker CE and Docker Compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Ensure Docker service is running
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+
+# --- PREPARE DOCKER WAF DIRECTORY STRUCTURE ---
+
+- name: Create WAF deployment directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /opt/waf-nginx
+    - /opt/waf-nginx/modsec
+
+# --- COPY CONFIGURATIONS AND TEMPLATES ---
+
+- name: Copy Dockerfile to WAF host
+  ansible.builtin.copy:
+    src: Dockerfile
+    dest: /opt/waf-nginx/Dockerfile
     owner: root
     group: root
     mode: "0644"
-  notify: Reload Nginx
 
-- name: Enable Juice Shop reverse proxy site
+- name: Copy Custom nginx.conf to WAF host
+  ansible.builtin.copy:
+    src: nginx.conf
+    dest: /opt/waf-nginx/nginx.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Copy docker-compose.yml template to WAF host
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/waf-nginx/docker-compose.yml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Copy Juice Shop proxy virtual host config to WAF host
+  ansible.builtin.template:
+    src: juice_shop_proxy.conf.j2
+    dest: /opt/waf-nginx/juice_shop_proxy.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+# --- DOWNLOAD MODSECURITY CORE CONFIGS ---
+
+- name: Download recommended modsecurity.conf
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/SpiderLabs/ModSecurity/v3/master/modsecurity.conf-recommended
+    dest: /opt/waf-nginx/modsec/modsecurity.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Download ModSecurity unicode.mapping
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/SpiderLabs/ModSecurity/v3/master/unicode.mapping
+    dest: /opt/waf-nginx/modsec/unicode.mapping
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable ModSecurity SecRuleEngine in config
+  ansible.builtin.replace:
+    path: /opt/waf-nginx/modsec/modsecurity.conf
+    regexp: "SecRuleEngine DetectionOnly"
+    replace: "SecRuleEngine On"
+
+# --- CONFIGURE OWASP CRS V4.0.0 ---
+
+- name: Clone OWASP CRS Core Rule Set (v4.0.0)
+  ansible.builtin.git:
+    repo: https://github.com/coreruleset/coreruleset.git
+    dest: /opt/waf-nginx/modsec/coreruleset
+    version: v4.0.0
+    depth: 1
+
+- name: Copy OWASP CRS main configuration
+  ansible.builtin.copy:
+    src: /opt/waf-nginx/modsec/coreruleset/crs-setup.conf.example
+    dest: /opt/waf-nginx/modsec/crs-setup.conf
+    owner: root
+    group: root
+    mode: "0644"
+    remote_src: true
+
+- name: Create rule directory symlink
   ansible.builtin.file:
-    src: /etc/nginx/sites-available/juice-shop.conf
-    dest: /etc/nginx/sites-enabled/juice-shop.conf
+    src: /opt/waf-nginx/modsec/coreruleset/rules
+    dest: /opt/waf-nginx/modsec/rules
     state: link
-  notify: Reload Nginx
+    force: true
 
-- name: Disable default Nginx site
-  ansible.builtin.file:
-    path: /etc/nginx/sites-enabled/default
-    state: absent
-  notify: Reload Nginx
+- name: Create main ModSecurity configuration file
+  ansible.builtin.copy:
+    dest: /opt/waf-nginx/modsec/main.conf
+    content: |
+      include /etc/nginx/modsec/modsecurity.conf
+      include /etc/nginx/modsec/crs-setup.conf
+      include /etc/nginx/modsec/rules/*.conf
+    owner: root
+    group: root
+    mode: "0644"
 
-- name: Validate Nginx config
-  ansible.builtin.command: nginx -t
+# --- COPY ML TUNED EXCLUSIONS ---
+
+- name: Copy ML-tuned rules exclusions to WAF host
+  ansible.builtin.copy:
+    src: RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
+    dest: /opt/waf-nginx/modsec/coreruleset/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+# --- ECR AUTHENTICATION AND RUN CONTAINER ---
+
+- name: Install AWS CLI on WAF host
+  ansible.builtin.apt:
+    name: awscli
+    state: present
+    update_cache: true
+
+- name: Authenticate Docker with AWS ECR
+  ansible.builtin.shell: |
+    aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com
   changed_when: false
 
-- name: Enable Nginx service
-  ansible.builtin.systemd:
-    name: nginx
-    enabled: true
-    state: started
+- name: Pull WAF image from ECR
+  ansible.builtin.command:
+    cmd: docker compose pull
+    chdir: /opt/waf-nginx
+  changed_when: false
+
+- name: Run WAF Nginx Container using Docker Compose
+  ansible.builtin.command:
+    cmd: docker compose up -d
+    chdir: /opt/waf-nginx
+  register: compose_output
+  changed_when: "'Started' in compose_output.stdout or 'Recreated' in compose_output.stdout"

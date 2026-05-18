@@ -1,5 +1,11 @@
 ---
 - name: Reload Nginx
-  ansible.builtin.systemd:
-    name: nginx
-    state: reloaded
+  ansible.builtin.command:
+    cmd: docker exec waf-nginx nginx -s reload
+  ignore_errors: true
+
+- name: Restart Nginx
+  ansible.builtin.command:
+    cmd: docker compose restart
+    chdir: /opt/waf-nginx
+  ignore_errors: true

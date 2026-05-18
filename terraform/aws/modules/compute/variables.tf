@@ -29,3 +29,8 @@ variable "vpn_node_name" {
 variable "waf_node_name" {
   type = string
 }
+
+variable "waf_iam_instance_profile" {
+  type    = string
+  default = ""
+}

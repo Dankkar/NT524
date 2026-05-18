@@ -51,10 +51,11 @@ resource "aws_instance" "vpn_gateway" {
 }
 
 resource "aws_instance" "waf_node" {
-  ami           = data.aws_ami.ubuntu.id
-  instance_type = var.instance_type
-  subnet_id     = var.subnet_id
-  key_name      = aws_key_pair.vpn_key.key_name
+  ami                  = data.aws_ami.ubuntu.id
+  instance_type        = var.instance_type
+  subnet_id            = var.subnet_id
+  key_name             = aws_key_pair.vpn_key.key_name
+  iam_instance_profile = var.waf_iam_instance_profile
 
   vpc_security_group_ids = [var.waf_sg_id]
 

@@ -79,3 +79,9 @@ variable "waf_node_name" {
   description = "Name tag for the AWS WAF node"
   default     = "aws-waf-node"
 }
+
+variable "github_repository" {
+  type        = string
+  description = "GitHub repository path (e.g. your-username/your-repo-name) allowed to assume the ECR push role"
+  default     = "erotonin/DevSecOps-Voting-App"
+}
