@@ -78,20 +78,22 @@ jobs:
       - name: Deploy on AWS WAF Node via SSH
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.EC2_WAF_HOST }} # IP Public của AWS WAF Node
+          host: ${{ secrets.EC2_WAF_HOST }}
           username: ubuntu
-          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }} # Private SSH Key để kết nối
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            # Clone/Sync tệp cấu hình mới nhất sang thư mục Deploy
-            # (Hoặc kéo repository mới nhất từ Git về Host)
-            # Ở đây chúng ta chạy trực tiếp các lệnh Docker Compose kéo và chạy WAF
+            # 1. Tự động cài đặt AWS CLI trên EC2 nếu chưa tồn tại
+            if ! command -v aws &> /dev/null; then
+              echo "AWS CLI is not installed. Installing..."
+              sudo apt-get update && sudo apt-get install -y awscli
+            fi
             
-            # Đăng nhập ECR trực tiếp bằng IAM Instance Profile gắn sẵn trên EC2
-            aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com
+            # 2. Đăng nhập vào AWS ECR sử dụng IAM Instance Profile của EC2 (Dùng sudo để tránh lỗi Docker socket permission)
+            sudo aws ecr get-login-password --region ap-southeast-1 | sudo docker login --username AWS --password-stdin 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com
             
-            # Di chuyển vào thư mục deploy WAF trên EC2
+            # 3. Di chuyển vào thư mục deploy WAF trên EC2
             cd /opt/waf-nginx
             
-            # Kéo Image WAF mới nhất về và kích hoạt
-            docker compose pull
-            docker compose up -d
+            # 4. Kéo Image WAF mới nhất từ ECR về và kích hoạt (Dùng sudo)
+            sudo docker compose pull
+            sudo docker compose up -d
