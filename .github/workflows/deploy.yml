@@ -41,14 +41,14 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Biên dịch ModSecurity và Nginx Connector cực nhanh trên máy ảo GitHub (chỉ mất 2-3 phút)
-      - name: Build WAF Docker Image
+      # Thực hiện Build & Tag Docker Image với ModSecurity tích hợp (Tag kép: latest và Git Commit SHA)
+      - name: Build Docker Image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: my-waf-nginx
           IMAGE_TAG: latest
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ansible/roles/nginx_waf/files/Dockerfile ansible/roles/nginx_waf/files/
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} -f ansible/roles/nginx_waf/files/Dockerfile ansible/roles/nginx_waf/files/
 
       # Quét lỗ hổng bảo mật của Docker Image vừa build bằng Trivy trước khi đẩy lên
       - name: Container Image Vulnerability Scan
@@ -61,7 +61,7 @@ jobs:
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
-      # Đẩy Image sạch lên AWS ECR
+      # Đẩy Image sạch lên AWS ECR (Đẩy cả 2 tag: latest và Git Commit SHA)
       - name: Push Image to Amazon ECR
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -69,6 +69,7 @@ jobs:
           IMAGE_TAG: latest
         run: |
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
 
   deploy:
     name: Trigger Deploy via SSH & Ansible
@@ -77,10 +78,13 @@ jobs:
     steps:
       - name: Deploy on AWS WAF Node via SSH
         uses: appleboy/ssh-action@master
+        env:
+          GITHUB_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.EC2_WAF_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          envs: GITHUB_SHA
           script: |
             # 1. Tự động cài đặt AWS CLI trên EC2 nếu chưa tồn tại
             if ! command -v aws &> /dev/null; then
@@ -94,6 +98,31 @@ jobs:
             # 3. Di chuyển vào thư mục deploy WAF trên EC2
             cd /opt/waf-nginx
             
-            # 4. Kéo Image WAF mới nhất từ ECR về và kích hoạt (Dùng sudo)
+            # 4. Ghi đè tệp docker-compose.yml trên EC2 sử dụng ảnh được gắn tag duy nhất theo Git Commit SHA (Không dùng nhãn 'latest' đơn lẻ)
+            sudo tee /opt/waf-nginx/docker-compose.yml > /dev/null << EOF
+            version: '3.8'
+            
+            services:
+              waf-nginx:
+                image: 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:$GITHUB_SHA
+                container_name: waf-nginx
+                network_mode: host
+                restart: always
+                volumes:
+                  - ./nginx.conf:/etc/nginx/nginx.conf:ro
+                  - ./juice_shop_proxy.conf:/etc/nginx/conf.d/default.conf:ro
+                  - ./modsec/main.conf:/etc/nginx/modsec/main.conf:ro
+                  - ./modsec/modsecurity.conf:/etc/nginx/modsec/modsecurity.conf:ro
+                  - ./modsec/unicode.mapping:/etc/nginx/modsec/unicode.mapping:ro
+                  - ./modsec/crs-setup.conf:/etc/nginx/modsec/crs-setup.conf:ro
+                  - ./modsec/rules:/etc/nginx/modsec/rules
+                logging:
+                  driver: "json-file"
+                  options:
+                    max-size: "10m"
+                    max-file: "3"
+            EOF
+            
+            # 5. Kéo Image WAF có tag Commit SHA này từ ECR về và kích hoạt (Dùng sudo)
             sudo docker compose pull
             sudo docker compose up -d
