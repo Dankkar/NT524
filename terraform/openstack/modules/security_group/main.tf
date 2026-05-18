@@ -69,7 +69,7 @@ resource "openstack_networking_secgroup_rule_v2" "vpn_wg" {
 resource "openstack_networking_secgroup_rule_v2" "vpn_allow_app_net" {
   direction         = "ingress"
   ethertype         = "IPv4"
-  remote_ip_prefix  = "10.0.1.0/24"
+  remote_ip_prefix  = var.app_subnet_cidr
   security_group_id = openstack_networking_secgroup_v2.vpn_sg.id
 }
 

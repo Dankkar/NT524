@@ -13,3 +13,19 @@ variable "vpn_sg_id" {
 variable "public_key_path" {
   type = string
 }
+
+variable "keypair_name" {
+  type = string
+}
+
+variable "instance_type" {
+  type = string
+}
+
+variable "vpn_node_name" {
+  type = string
+}
+
+variable "waf_node_name" {
+  type = string
+}

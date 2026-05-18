@@ -6,14 +6,14 @@ terraform {
   }
 }
 resource "openstack_compute_keypair_v2" "my_key" {
-  name       = "vpn_key"
-  public_key = file("~/.ssh/vpn_key.pub")
+  name       = var.keypair_name
+  public_key = file(var.public_key_path)
 }
 
 resource "openstack_compute_instance_v2" "app_node" {
-  name            = "app-node"
-  image_name      = "ubuntu22.04"
-  flavor_name     = "m1.small"
+  name            = var.app_node_name
+  image_name      = var.image_name
+  flavor_name     = var.flavor_name
   key_pair        = openstack_compute_keypair_v2.my_key.name
   security_groups = [var.app_sg_id]
 
@@ -31,20 +31,20 @@ resource "openstack_compute_instance_v2" "app_node" {
                 ip route del 8.8.4.4 || true
                 
                 ip route del default || true
-                ip route add default via 10.0.1.254
+                ip route add default via ${var.vpn_app_ip}
                 
                 echo "nameserver 8.8.8.8" > /etc/resolv.conf
                 EOF
 }
 
 resource "openstack_networking_port_v2" "vpn_app_port" {
-  name               = "vpn_app_port"
+  name               = "${var.vpn_node_name}_app_port"
   network_id         = var.app_network_id
   security_group_ids = [var.vpn_sg_id]
 
   fixed_ip {
     subnet_id  = var.app_subnet_id
-    ip_address = "10.0.1.254"
+    ip_address = var.vpn_app_ip
   }
 
   allowed_address_pairs {
@@ -53,9 +53,9 @@ resource "openstack_networking_port_v2" "vpn_app_port" {
 }
 
 resource "openstack_compute_instance_v2" "vpn_gateway" {
-  name            = "vpn-gateway"
-  image_name      = "ubuntu22.04"
-  flavor_name     = "m1.small"
+  name            = var.vpn_node_name
+  image_name      = var.image_name
+  flavor_name     = var.flavor_name
   key_pair        = openstack_compute_keypair_v2.my_key.name
   security_groups = [var.vpn_sg_id]
 

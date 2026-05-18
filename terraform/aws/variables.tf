@@ -55,3 +55,27 @@ variable "public_key_path" {
   description = "Path to the SSH public key imported as the AWS EC2 key pair."
   default     = "~/.ssh/aws_vpn_key.pub"
 }
+
+variable "keypair_name" {
+  type        = string
+  description = "Name of the AWS EC2 Keypair"
+  default     = "aws_vpn_key"
+}
+
+variable "instance_type" {
+  type        = string
+  description = "EC2 Instance type for WAF and VPN nodes"
+  default     = "t3.micro"
+}
+
+variable "vpn_node_name" {
+  type        = string
+  description = "Name tag for the AWS VPN node"
+  default     = "aws-vpn-gateway"
+}
+
+variable "waf_node_name" {
+  type        = string
+  description = "Name tag for the AWS WAF node"
+  default     = "aws-waf-node"
+}

@@ -43,12 +43,25 @@ Output mong đợi:
 
 ## 1. Terraform OpenStack
 
-Mục đích: tạo OpenStack App Node và OpenStack VPN Node. Terraform chỉ tạo hạ tầng, không cài Docker/Juice Shop/ELK.
+Mục đích: Tạo OpenStack App Node và OpenStack VPN Node. Hạ tầng OpenStack hiện tại đã được refactor toàn bộ để dễ dàng cấu hình qua biến.
 
+**Các bước thực hiện:**
+
+1. Cấu hình biến môi trường và load admin OpenStack:
 ```bash
 source /home/nhatnguyen/kolla-venv/bin/activate
 source /etc/kolla/admin-openrc.sh 
+```
+
+2. Di chuyển vào thư mục hạ tầng OpenStack:
+```bash
 cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/terraform/openstack
+```
+
+3. Mở và chỉnh sửa file cấu hình `terraform.tfvars`. Đảm bảo điền đúng `external_network_id`, đường dẫn `public_key_path`, tên `image_name` và các dải mạng phù hợp với lab OpenStack AIO của bạn.
+
+4. Khởi tạo và chạy Terraform:
+```bash
 terraform init
 terraform apply
 terraform output

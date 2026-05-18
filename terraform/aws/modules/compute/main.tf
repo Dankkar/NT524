@@ -15,13 +15,13 @@ data "aws_ami" "ubuntu" {
 }
 
 resource "aws_key_pair" "vpn_key" {
-  key_name   = "aws_vpn_key"
+  key_name   = var.keypair_name
   public_key = file(var.public_key_path)
 }
 
 resource "aws_instance" "vpn_gateway" {
   ami           = data.aws_ami.ubuntu.id
-  instance_type = "t3.micro"
+  instance_type = var.instance_type
   subnet_id     = var.subnet_id
   key_name      = aws_key_pair.vpn_key.key_name
 
@@ -46,13 +46,13 @@ resource "aws_instance" "vpn_gateway" {
               EOF
 
   tags = {
-    Name = "aws-vpn-gateway"
+    Name = var.vpn_node_name
   }
 }
 
 resource "aws_instance" "waf_node" {
   ami           = data.aws_ami.ubuntu.id
-  instance_type = "t3.micro"
+  instance_type = var.instance_type
   subnet_id     = var.subnet_id
   key_name      = aws_key_pair.vpn_key.key_name
 
@@ -67,7 +67,7 @@ resource "aws_instance" "waf_node" {
               EOF
 
   tags = {
-    Name = "aws-waf-node"
+    Name = var.waf_node_name
   }
 
   depends_on = [aws_instance.vpn_gateway]
