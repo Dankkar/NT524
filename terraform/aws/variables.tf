@@ -83,5 +83,5 @@ variable "waf_node_name" {
 variable "github_repository" {
   type        = string
   description = "GitHub repository path (e.g. your-username/your-repo-name) allowed to assume the ECR push role"
-  default     = "erotonin/DevSecOps-Voting-App"
+  default     = "Dankkar/NT524"
 }
