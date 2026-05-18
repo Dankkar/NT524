@@ -1,0 +1,37 @@
+---
+all:
+  children:
+    vpn_gateways:
+      children:
+        aws_vpn:
+          hosts:
+            aws-vpn:
+              ansible_host: CHANGE_ME_AWS_VPN_PUBLIC_IP
+              ansible_user: ubuntu
+              wireguard_address: 10.200.0.1
+              wireguard_peer_host: openstack-vpn
+              wireguard_peer_allowed_ips:
+                - 10.200.0.2/32
+                - "{{ openstack_app_cidr }}"
+        openstack_vpn:
+          hosts:
+            openstack-vpn:
+              ansible_host: CHANGE_ME_OPENSTACK_VPN_FLOATING_IP
+              ansible_user: ubuntu
+              wireguard_endpoint: ""
+              wireguard_address: 10.200.0.2
+              wireguard_peer_host: aws-vpn
+              wireguard_peer_allowed_ips:
+                - 10.200.0.1/32
+                - "{{ aws_vpc_cidr }}"
+    waf_nodes:
+      hosts:
+        aws-waf:
+          ansible_host: CHANGE_ME_AWS_WAF_PUBLIC_IP
+          ansible_user: ubuntu
+    app_nodes:
+      hosts:
+        openstack-app:
+          ansible_host: CHANGE_ME_OPENSTACK_APP_PRIVATE_IP
+          ansible_user: ubuntu
+          ansible_ssh_common_args: "-o ProxyCommand='ssh -i ~/.ssh/openstack_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_OPENSTACK_VPN_FLOATING_IP'"

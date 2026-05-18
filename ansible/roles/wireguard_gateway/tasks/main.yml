@@ -1,0 +1,194 @@
+---
+- name: Ensure local hostname resolves
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s+'
+    line: "127.0.1.1 {{ ansible_hostname }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Wait for cloud-init to finish
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'if command -v cloud-init >/dev/null 2>&1; then cloud-init status --wait; fi'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Wait for apt/dpkg locks
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'while command -v fuser >/dev/null 2>&1 &&
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+    /var/cache/apt/archives/lock /var/lib/apt/lists/lock >/dev/null 2>&1;
+    do sleep 5; done'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Preseed iptables-persistent prompts
+  ansible.builtin.shell: |
+    printf '%s\n' \
+      'iptables-persistent iptables-persistent/autosave_v4 boolean true' \
+      'iptables-persistent iptables-persistent/autosave_v6 boolean true' |
+    debconf-set-selections
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install VPN packages
+  ansible.builtin.apt:
+    name:
+      - wireguard
+      - iptables
+      - iptables-persistent
+    state: present
+    lock_timeout: 600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Enable IPv4 forwarding
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: '^net\.ipv4\.ip_forward='
+    line: net.ipv4.ip_forward=1
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply IPv4 forwarding
+  ansible.builtin.command: sysctl -w net.ipv4.ip_forward=1
+  changed_when: false
+
+- name: Create WireGuard config directory
+  ansible.builtin.file:
+    path: "{{ wireguard_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Check WireGuard private key
+  ansible.builtin.stat:
+    path: "{{ wireguard_private_key_path }}"
+  register: wireguard_private_key_stat
+
+- name: Generate WireGuard private key
+  ansible.builtin.shell: "umask 077 && wg genkey > {{ wireguard_private_key_path }}"
+  args:
+    executable: /bin/bash
+  when: not wireguard_private_key_stat.stat.exists
+  no_log: true
+
+- name: Read WireGuard private key
+  ansible.builtin.slurp:
+    src: "{{ wireguard_private_key_path }}"
+  register: wireguard_private_key_file
+  no_log: true
+
+- name: Calculate WireGuard public key
+  ansible.builtin.shell: "cat {{ wireguard_private_key_path }} | wg pubkey"
+  args:
+    executable: /bin/bash
+  register: wireguard_public_key_cmd
+  changed_when: false
+  no_log: true
+
+- name: Store WireGuard key facts
+  ansible.builtin.set_fact:
+    wireguard_private_key: "{{ wireguard_private_key_file.content | b64decode | trim }}"
+    wireguard_public_key: "{{ wireguard_public_key_cmd.stdout | trim }}"
+  no_log: true
+
+- name: Configure WireGuard interface
+  ansible.builtin.template:
+    src: wg0.conf.j2
+    dest: "{{ wireguard_config_dir }}/{{ wireguard_interface }}.conf"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart WireGuard
+
+- name: Allow forwarding into WireGuard
+  ansible.builtin.command: "iptables -C FORWARD -i {{ wireguard_interface }} -j ACCEPT"
+  register: forward_in_check
+  changed_when: false
+  failed_when: forward_in_check.rc not in [0, 1]
+
+- name: Add forwarding into WireGuard
+  ansible.builtin.command: "iptables -A FORWARD -i {{ wireguard_interface }} -j ACCEPT"
+  when: forward_in_check.rc == 1
+
+- name: Allow forwarding out of WireGuard
+  ansible.builtin.command: "iptables -C FORWARD -o {{ wireguard_interface }} -j ACCEPT"
+  register: forward_out_check
+  changed_when: false
+  failed_when: forward_out_check.rc not in [0, 1]
+
+- name: Add forwarding out of WireGuard
+  ansible.builtin.command: "iptables -A FORWARD -o {{ wireguard_interface }} -j ACCEPT"
+  when: forward_out_check.rc == 1
+
+- name: Detect OpenStack app-side interface
+  ansible.builtin.shell: "ip -o -4 addr show to {{ openstack_vpn_app_ip }} | awk '{print $2; exit}'"
+  args:
+    executable: /bin/bash
+  register: openstack_app_interface_cmd
+  changed_when: false
+  when:
+    - inventory_hostname in groups.openstack_vpn
+    - wireguard_openstack_app_nat | bool
+
+- name: Store OpenStack app-side interface
+  ansible.builtin.set_fact:
+    openstack_app_interface: "{{ openstack_app_interface_cmd.stdout | trim }}"
+  when:
+    - inventory_hostname in groups.openstack_vpn
+    - wireguard_openstack_app_nat | bool
+
+- name: Require OpenStack app-side interface
+  ansible.builtin.assert:
+    that:
+      - openstack_app_interface | length > 0
+    fail_msg: "Could not find the OpenStack VPN interface with IP {{ openstack_vpn_app_ip }}."
+  when:
+    - inventory_hostname in groups.openstack_vpn
+    - wireguard_openstack_app_nat | bool
+
+- name: Check OpenStack app NAT rules
+  ansible.builtin.command: >-
+    iptables -t nat -C POSTROUTING
+    -s {{ item }}
+    -d {{ openstack_app_cidr }}
+    -o {{ openstack_app_interface }}
+    -j MASQUERADE
+  loop: "{{ wireguard_openstack_app_nat_source_cidrs }}"
+  register: openstack_app_nat_checks
+  changed_when: false
+  failed_when: openstack_app_nat_checks.rc not in [0, 1]
+  when:
+    - inventory_hostname in groups.openstack_vpn
+    - wireguard_openstack_app_nat | bool
+
+- name: Add OpenStack app NAT rules
+  ansible.builtin.command: >-
+    iptables -t nat -A POSTROUTING
+    -s {{ item.item }}
+    -d {{ openstack_app_cidr }}
+    -o {{ openstack_app_interface }}
+    -j MASQUERADE
+  loop: "{{ openstack_app_nat_checks.results | selectattr('rc', 'equalto', 1) | list }}"
+  when:
+    - inventory_hostname in groups.openstack_vpn
+    - wireguard_openstack_app_nat | bool
+
+- name: Persist iptables rules
+  ansible.builtin.command: netfilter-persistent save
+  changed_when: false
+
+- name: Enable WireGuard service
+  ansible.builtin.systemd:
+    name: "wg-quick@{{ wireguard_interface }}"
+    enabled: true
+    state: started

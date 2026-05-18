@@ -2,9 +2,49 @@
 .terraform/
 *.tfstate
 *.tfstate.backup
+*.tfstate.*
 *.tfvars
 *.tfvars.json
 .terraform.lock.hcl
+crash.log
+crash.*.log
+*.tfplan
+*.plan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# --- Ansible ---
+*.retry
+.ansible/
+ansible/.cache/
+ansible/tmp/
+ansible/facts_cache/
+ansible/.fact_cache/
+ansible/.vault_pass*
+ansible/vault_pass*
+ansible/**/secrets*.yml
+ansible/**/secrets*.yaml
+ansible/**/vault*.yml
+ansible/**/vault*.yaml
+ansible/inventories/**/hosts.yml
+ansible/inventories/**/hosts.yaml
+ansible/inventories/**/hosts.local.yml
+ansible/inventories/**/hosts.local.yaml
+!ansible/inventories/**/hosts.example.yml
+!ansible/inventories/**/hosts.example.yaml
+
+# --- SSH / cloud credentials ---
+*.pem
+*.key
+*.pub
+id_rsa*
+id_ed25519*
+clouds.yaml
+secure.yaml
+openrc
+*-openrc.sh
 
 # --- Python ---
 __pycache__/
@@ -20,6 +60,20 @@ dist/
 *.egg-info/
 modsec-learn/
 
+# --- Docker / local services ---
+docker-compose.override.yml
+.docker/
+data/
+volumes/
+elk/.env
+elk/*.local
+elk/*.pid
+elk/logs/
+elk/logstash/
+elk/exports/
+elk/tmp/
+elk/snapshots/
+
 # --- ModSecurity & ML ---
 # Không nên push bộ luật CRS (nặng và nên clone riêng)
 modsec-learn/coreruleset/
@@ -30,9 +84,18 @@ modsec-learn/data/figures/*.png
 
 # Không nên push các file model lớn (tùy chọn)
 # modsec-learn/data/models/*.joblib
+*.pkl
+*.joblib
+*.onnx
+*.h5
+mlruns/
+mlartifacts/
 
 # Loại bỏ các file dataset thô (thường rất nặng)
 modsec-learn/data/dataset/*.json
+*.csv
+*.parquet
+*.ndjson
 # Ngoại trừ các file cấu hình quan trọng
 !modsec-learn/data/crs_sqli_ids_4.0.0.json
 !modsec-learn/data/crs_sqli_weights_4.0.0.json
@@ -46,4 +109,11 @@ modsec-learn/data/dataset/*.json
 
 # --- Logs ---
 *.log
+logs/
 modsec_config/debug.log
+
+# --- Local SIEM generated artifacts ---
+exports/
+reports/generated/
+*.pid
+*.sock

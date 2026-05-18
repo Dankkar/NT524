@@ -1,0 +1,50 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: siem-elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+    ports:
+      - "172.10.10.1:9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - siem
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    container_name: siem-kibana
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTICSEARCH_HOSTS: "http://elasticsearch:9200"
+      SERVER_HOST: "0.0.0.0"
+      I18N_LOCALE: "en"
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: "siem_hybrid_encrypted_saved_objects_key_2026"
+      XPACK_REPORTING_ENCRYPTIONKEY: "siem_hybrid_reporting_encryption_key_2026"
+      XPACK_SECURITY_ENCRYPTIONKEY: "siem_hybrid_security_encryption_key_2026"
+    ports:
+      - "127.0.0.1:5601:5601"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5601/api/status >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+    networks:
+      - siem
+
+networks:
+  siem:
+    name: siem-elk
+
+volumes:
+  elasticsearch-data:
+    name: siem-elasticsearch-data

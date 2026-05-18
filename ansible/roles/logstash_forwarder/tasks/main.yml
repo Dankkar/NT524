@@ -1,0 +1,128 @@
+---
+- name: Wait for apt/dpkg locks
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'while command -v fuser >/dev/null 2>&1 &&
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+    /var/cache/apt/archives/lock /var/lib/apt/lists/lock >/dev/null 2>&1;
+    do sleep 5; done'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Force apt to use IPv4
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/99force-ipv4
+    content: 'Acquire::ForceIPv4 "true";'
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure static DNS resolvers
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: |
+      nameserver 8.8.8.8
+      nameserver 1.1.1.1
+    owner: root
+    group: root
+    mode: "0644"
+    force: true
+
+- name: Install Elastic repository dependencies
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - gnupg
+    state: present
+    lock_timeout: 600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Install Elastic package signing key
+  ansible.builtin.get_url:
+    url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+    dest: /usr/share/keyrings/elasticsearch-keyring.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure Elastic APT repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.asc] https://artifacts.elastic.co/packages/{{ elastic_stack_major_version }}/apt stable main"
+    filename: "elastic-{{ elastic_stack_major_version }}"
+    state: present
+    update_cache: true
+
+- name: Install Logstash
+  ansible.builtin.apt:
+    name: logstash
+    state: present
+    lock_timeout: 600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Ensure Logstash runtime directories are writable
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: logstash
+    group: logstash
+    mode: "0755"
+  loop:
+    - /var/lib/logstash
+    - /var/log/logstash
+
+- name: Create Logstash systemd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/logstash.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Limit Logstash stop wait time
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/logstash.service.d/override.conf
+    content: |
+      [Service]
+      TimeoutStopSec=30
+      KillMode=mixed
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Logstash
+
+- name: Configure Logstash settings
+  ansible.builtin.template:
+    src: logstash.yml.j2
+    dest: /etc/logstash/logstash.yml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Logstash
+
+- name: Configure Logstash pipeline list
+  ansible.builtin.template:
+    src: pipelines.yml.j2
+    dest: /etc/logstash/pipelines.yml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Logstash
+
+- name: Configure SIEM Logstash pipeline
+  ansible.builtin.template:
+    src: siem-hybrid.conf.j2
+    dest: /etc/logstash/conf.d/siem-hybrid.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Logstash
+
+- name: Enable Logstash service
+  ansible.builtin.systemd:
+    name: logstash
+    enabled: true
+    state: started

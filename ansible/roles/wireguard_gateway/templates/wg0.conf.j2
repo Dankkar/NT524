@@ -1,0 +1,14 @@
+[Interface]
+Address = {{ wireguard_address }}/24
+ListenPort = {{ wireguard_port }}
+PrivateKey = {{ wireguard_private_key }}
+SaveConfig = false
+
+[Peer]
+PublicKey = {{ hostvars[wireguard_peer_host].wireguard_public_key }}
+AllowedIPs = {{ wireguard_peer_allowed_ips | join(', ') }}
+{% set peer_endpoint = hostvars[wireguard_peer_host].wireguard_endpoint | default(hostvars[wireguard_peer_host].ansible_host ~ ':' ~ wireguard_port) %}
+{% if peer_endpoint | string | length > 0 %}
+Endpoint = {{ peer_endpoint }}
+{% endif %}
+PersistentKeepalive = {{ wireguard_persistent_keepalive }}

@@ -1,0 +1,26 @@
+# Copy this file to terraform.tfvars and replace values with IDs from your AWS account.
+# terraform.tfvars is ignored by git because it is environment-specific.
+
+aws_region = "ap-southeast-1"
+
+# Existing VPC where the WAF and VPN EC2 instances will be created.
+vpc_id = "vpc-CHANGE_ME"
+
+# Existing public subnet in the VPC above.
+# The subnet route table should have a default route to an Internet Gateway.
+subnet_id = "subnet-CHANGE_ME"
+
+# Route table associated with the selected public subnet.
+# Terraform will add the route to the OpenStack app CIDR through the AWS VPN ENI here.
+route_table_id = "rtb-CHANGE_ME"
+
+# OpenStack App subnet routed through WireGuard.
+openstack_app_cidr = "10.0.1.0/24"
+
+# Real WAN/NAT public IP of the laptop/OpenStack AIO host as seen from the Internet.
+# Do not use the OpenStack floating IP 172.10.10.x here.
+# Example: openstack_vpn_public_cidr = "203.0.113.10/32"
+openstack_vpn_public_cidr = "CHANGE_ME_PUBLIC_WAN_IP/32"
+
+# Public key imported to AWS as the EC2 key pair named aws_vpn_key.
+public_key_path = "~/.ssh/aws_vpn_key.pub"
