@@ -29,8 +29,13 @@ RUN wget http://nginx.org/download/nginx-1.24.0.tar.gz && \
 # Stage 2: Production stage (lean WAF Nginx runtime)
 FROM nginx:1.24.0
 
-# Upgrade all system packages to patch OS-level CVEs and secure the WAF runtime
+# Upgrade system packages and install necessary WAF runtime libraries (resolves ngx_http_modsecurity_module.so dependencies)
 RUN apt-get update && apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+        libcurl3-gnutls \
+        libyajl2 \
+        libgeoip1 \
+        libxml2 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
