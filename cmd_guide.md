@@ -77,13 +77,60 @@ Cần ghi lại:
 
 Mục đích: tạo AWS WAF Node, AWS VPN Node, route AWS đến OpenStack app subnet qua ENI của AWS VPN Node.
 
-Trong laptop AIO, OpenStack FIP `172.10.10.x` không phải public source trên Internet. Security group WireGuard trên AWS phải cho phép public source thật của laptop/router NAT. Lấy IP này bằng một trong hai cách:
+Terraform AWS dùng VPC/subnet/route table đã có sẵn trong account của người chạy. Không dùng lại ID trong môi trường của người khác. Tạo file biến riêng từ example:
+
+```bash
+cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/terraform/aws
+cp terraform.tfvars.example terraform.tfvars
+nano terraform.tfvars
+```
+
+Các biến bắt buộc phải thay:
+
+```hcl
+aws_region     = "ap-southeast-1"
+vpc_id         = "vpc-..."
+subnet_id      = "subnet-..."
+route_table_id = "rtb-..."
+openstack_vpn_public_cidr = "<REAL_LAPTOP_WAN_IP>/32"
+```
+
+Ý nghĩa:
+
+- `vpc_id`: VPC sẽ chứa WAF Node và AWS VPN Node.
+- `subnet_id`: public subnet trong VPC đó. Subnet này nên có route `0.0.0.0/0` đi Internet Gateway.
+- `route_table_id`: route table gắn với public subnet. Terraform sẽ thêm route tới `openstack_app_cidr` qua ENI của AWS VPN Node.
+- `openstack_vpn_public_cidr`: public WAN/NAT IP thật của laptop/OpenStack AIO host, không phải OpenStack FIP `172.10.10.x`.
+- `public_key_path`: SSH public key dùng để tạo AWS key pair `aws_vpn_key`.
+
+Nếu dùng AWS CLI, có thể lấy ID như sau:
+
+```bash
+aws ec2 describe-vpcs \
+  --region <AWS_REGION> \
+  --query 'Vpcs[].{VpcId:VpcId,CidrBlock:CidrBlock,Name:Tags[?Key==`Name`]|[0].Value}' \
+  --output table
+
+aws ec2 describe-subnets \
+  --region <AWS_REGION> \
+  --filters Name=vpc-id,Values=<VPC_ID> \
+  --query 'Subnets[].{SubnetId:SubnetId,CidrBlock:CidrBlock,AZ:AvailabilityZone,PublicIp:MapPublicIpOnLaunch,Name:Tags[?Key==`Name`]|[0].Value}' \
+  --output table
+
+aws ec2 describe-route-tables \
+  --region <AWS_REGION> \
+  --filters Name=vpc-id,Values=<VPC_ID> \
+  --query 'RouteTables[].{RouteTableId:RouteTableId,Associations:Associations[].SubnetId,Routes:Routes[].DestinationCidrBlock}' \
+  --output table
+```
+
+Trong laptop AIO, OpenStack FIP `172.10.10.x` không phải public source trên Internet. Security group WireGuard trên AWS phải cho phép public source thật của laptop/router NAT. Lấy IP này bằng:
 
 ```bash
 curl -fsS https://checkip.amazonaws.com
 ```
 
-Hoặc sau khi VPN đã handshake, đọc endpoint mà AWS thấy:
+Sau khi VPN đã handshake, có thể kiểm chứng endpoint mà AWS thấy:
 
 ```bash
 cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/ansible
@@ -93,12 +140,13 @@ ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
 ansible -i inventories/production/hosts.yml aws_vpn -b -m shell -a 'wg show wg0 endpoints'
 ```
 
-Apply AWS với `/32` của IP đó:
+Apply AWS:
 
 ```bash
 cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/terraform/aws
 terraform init
-terraform apply -var 'openstack_vpn_public_cidr=<REAL_LAPTOP_WAN_IP>/32'
+terraform validate
+terraform apply
 terraform output
 ```
 
