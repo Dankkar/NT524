@@ -29,6 +29,11 @@ RUN wget http://nginx.org/download/nginx-1.24.0.tar.gz && \
 # Stage 2: Production stage (lean WAF Nginx runtime)
 FROM nginx:1.24.0
 
+# Upgrade all system packages to patch OS-level CVEs and secure the WAF runtime
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy ModSecurity compiled core library
 COPY --from=builder /usr/local/modsecurity /usr/local/modsecurity
 RUN ln -s /usr/local/modsecurity/lib/libmodsecurity.so.3 /usr/lib/libmodsecurity.so.3
