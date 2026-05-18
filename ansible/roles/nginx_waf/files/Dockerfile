@@ -1,5 +1,5 @@
 # Stage 1: Build stage (compile ModSecurity and Nginx dynamic module)
-FROM debian:bookworm-slim AS builder
+FROM debian:bullseye-slim AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
@@ -27,7 +27,7 @@ RUN wget http://nginx.org/download/nginx-1.24.0.tar.gz && \
     make modules
 
 # Stage 2: Production stage (lean WAF Nginx runtime)
-FROM nginx:1.24.0-bookworm
+FROM nginx:1.24.0
 
 # Upgrade system packages and install necessary WAF runtime libraries (resolves ngx_http_modsecurity_module.so dependencies)
 RUN apt-get update && apt-get upgrade -y && \
