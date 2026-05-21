@@ -18,7 +18,7 @@ wireguard_openstack_app_nat_source_cidrs:
   - "{{ aws_vpc_cidr }}"
   - "{{ wireguard_cidr }}"
 
-app_backend_host: 10.0.1.220
+app_backend_host: 10.0.1.185
 app_backend_port: 80
 juice_shop_image: bkimminich/juice-shop
 juice_shop_container_name: juiceshop
@@ -38,17 +38,17 @@ elasticsearch_port: 9200
 filebeat_service_enabled: true
 
 filebeat_waf_inputs:
-  - id: nginx-access
+  - id: docker-containers
     paths:
-      - "{{ nginx_access_log }}"
+      - /var/lib/docker/containers/*/*.log
     fields:
-      log_type: nginx_access
+      log_type: docker_container
       node_role: waf
-  - id: nginx-error
+  - id: syslog
     paths:
-      - "{{ nginx_error_log }}"
+      - /var/log/syslog
     fields:
-      log_type: nginx_error
+      log_type: syslog
       node_role: waf
 
 filebeat_app_inputs:

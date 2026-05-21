@@ -1,579 +1,166 @@
-# SIEM Hybrid Cloud Command Guide
+# Hướng Dẫn Rebuild & Deploy Toàn Bộ Hệ Thống Từ Đầu (Sau khi `terraform destroy`)
 
-Guide này mô tả thứ tự chạy từ một repo mới clone để dựng lại lab SIEM hybrid cloud.
+Tài liệu này mô tả chi tiết thứ tự chạy các lệnh từ đầu hoặc sau khi hủy toàn bộ hạ tầng để dựng lại hệ thống SIEM Hybrid Cloud.
 
-Kiến trúc hiện tại:
+---
 
-- OpenStack AIO trên laptop: App Node và OpenStack VPN Node.
-- AWS: WAF Node và AWS VPN Node.
-- Local laptop: Elasticsearch và Kibana bằng Docker.
-- Logstash: chạy trên OpenStack VPN Node.
-- Filebeat trên App/WAF gửi log về `10.0.1.254:5044`, sau đó Logstash forward về Elasticsearch local `172.10.10.1:9200`.
+## BƯỚC 1: Dọn dẹp môi trường cũ (Destroy)
 
-Lưu ý quan trọng về OpenStack AIO laptop: `172.10.10.0/24` là provider/external network giả lập bằng `br-exnat + veth + NAT`, không phải public Internet thật. Vì vậy AWS không thể truy cập trực tiếp OpenStack floating IP `172.10.10.x`. Thiết kế hiện tại giống các project tham khảo: AWS VPN Node giữ public WireGuard endpoint, OpenStack VPN Node chủ động kết nối ra AWS public IP, AWS peer không hard-code endpoint OpenStack.
+Nếu bạn cần dọn dẹp hệ thống cũ, hãy chạy các lệnh sau:
 
-## 0. Điều kiện ban đầu
+1. **Hủy tài nguyên trên OpenStack**:
+   ```bash
+   source ~/kolla-venv/bin/activate
+   source /etc/kolla/admin-openrc.sh
+   cd /home/deployer/Downloads/Project/terraform/openstack
+   terraform destroy -auto-approve
+   ```
 
-Chạy trên laptop OpenStack AIO/local SIEM host.
+2. **Hủy tài nguyên trên AWS**:
+   ```bash
+   cd /home/deployer/Downloads/Project/terraform/aws
+   terraform destroy -auto-approve
+   ```
 
-Cần có:
+3. **Dọn dẹp cụm Elasticsearch/Kibana local**:
+   ```bash
+   cd /home/deployer/Downloads/Project/elk
+   sudo docker compose down -v
+   ```
 
-- Terraform đã cài và đang auth được AWS/OpenStack.
-- Ansible đã cài.
-- Docker + Docker Compose đã cài.
-- SSH keys:
-  - `~/.ssh/openstack_key`
-  - `~/.ssh/aws_vpn_key`
-- OpenStack AIO đã có bridge/NAT theo `Fundemental.md`: `br-exnat=172.10.10.1/24`, provider floating IP pool `172.10.10.200-250`.
+---
 
-Kiểm tra nhanh:
+## BƯỚC 2: Triển khai hạ tầng bằng Terraform (Deploy)
 
+1. **Triển khai OpenStack App & VPN Nodes**:
+   ```bash
+   source ~/kolla-venv/bin/activate
+   source /etc/kolla/admin-openrc.sh
+   cd /home/deployer/Downloads/Project/terraform/openstack
+   terraform init
+   terraform apply -auto-approve
+   ```
+   *Ghi lại các IP từ output:*
+   - `app_node_ip` (Ví dụ: `10.0.1.185`)
+   - `vpn_public_ip` (Ví dụ: `172.10.10.232`)
+
+2. **Triển khai AWS WAF & VPN Nodes**:
+   - Trước tiên, kiểm tra IP public thật của router/NAT tại local laptop (do IP nhà mạng có thể thay đổi):
+     ```bash
+     curl -fsS https://checkip.amazonaws.com
+     ```
+   - Mở file `/home/deployer/Downloads/Project/terraform/aws/terraform.tfvars` và cập nhật giá trị của `openstack_vpn_public_cidr` với IP public trên (dưới dạng `<IP>/32`).
+   - Chạy lệnh triển khai:
+     ```bash
+     cd /home/deployer/Downloads/Project/terraform/aws
+     terraform init
+     terraform apply -auto-approve
+     ```
+   *Ghi lại các IP từ output:*
+   - `vpn_public_ip` (Ví dụ: `18.136.65.78`)
+   - `waf_public_ip` (Ví dụ: `54.254.229.116`)
+
+---
+
+## BƯỚC 3: Cập nhật Cấu hình Ansible
+
+1. **Cập nhật Inventory Hosts**:
+   Mở file `/home/deployer/Downloads/Project/ansible/inventories/production/hosts.yml` và thay thế các IP mới tương ứng:
+   - `aws-vpn` -> `ansible_host`: Điền `vpn_public_ip` của AWS.
+   - `aws-waf` -> `ansible_host`: Điền `waf_public_ip` của AWS.
+   - `openstack-vpn` -> `ansible_host`: Điền `vpn_public_ip` (floating IP) của OpenStack.
+   - `openstack-app` -> `ProxyCommand`: Cập nhật IP của OpenStack VPN Node ở phần jump target (`ubuntu@<OPENSTACK_VPN_FIP>`).
+
+2. **Cập nhật Variables**:
+   Mở file `/home/deployer/Downloads/Project/ansible/inventories/production/group_vars/all.yml`:
+   - `app_backend_host`: Cập nhật IP private của OpenStack App Node (`app_node_ip` ở Bước 2.1).
+
+3. **Kiểm tra kết nối Ansible**:
+   ```bash
+   source ~/kolla-venv/bin/activate
+   cd /home/deployer/Downloads/Project/ansible
+   ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
+   ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
+   ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
+   ansible -i inventories/production/hosts.yml all -m ping
+   ```
+   *(Mong đợi tất cả 4 host trả về `ping: pong`).*
+
+---
+
+## BƯỚC 4: Build & Push Docker Image WAF lên AWS ECR
+
+Do WAF EC2 Node kéo trực tiếp Docker image từ kho chứa ECR của bạn, bạn cần build và push ảnh Docker WAF lên ECR:
+
+1. **Đăng nhập AWS ECR**:
+   ```bash
+   aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com
+   ```
+
+2. **Build Docker Image** (sử dụng network host để tránh xung đột bridge):
+   ```bash
+   cd /home/deployer/Downloads/Project
+   docker build --network=host -t 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest -f ansible/roles/nginx_waf/files/Dockerfile ansible/roles/nginx_waf/files/
+   ```
+
+3. **Push Docker Image**:
+   ```bash
+   docker push 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest
+   ```
+
+---
+
+## BƯỚC 5: Khởi động Cụm SIEM Local (Elasticsearch & Kibana)
+
+Cấu hình bộ nhớ ảo và khởi động container SIEM trên máy local:
 ```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM
-ip -br addr | grep -E 'wlp0s20f3|br-exnat|veth'
-docker compose version
-ansible --version
-terraform version
-```
-
-Output mong đợi:
-
-- Thấy `br-exnat` có IP `172.10.10.1/24`.
-- Docker Compose, Ansible, Terraform in version không lỗi.
-
-## 1. Terraform OpenStack
-
-Mục đích: Tạo OpenStack App Node và OpenStack VPN Node. Hạ tầng OpenStack hiện tại đã được refactor toàn bộ để dễ dàng cấu hình qua biến.
-
-**Các bước thực hiện:**
-
-1. Cấu hình biến môi trường và load admin OpenStack:
-```bash
-source /home/nhatnguyen/kolla-venv/bin/activate
-source /etc/kolla/admin-openrc.sh 
-```
-
-2. Di chuyển vào thư mục hạ tầng OpenStack:
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/terraform/openstack
-```
-
-3. Mở và chỉnh sửa file cấu hình `terraform.tfvars`. Đảm bảo điền đúng `external_network_id`, đường dẫn `public_key_path`, tên `image_name` và các dải mạng phù hợp với lab OpenStack AIO của bạn.
-
-4. Khởi tạo và chạy Terraform:
-```bash
-terraform init
-terraform apply
-terraform output
-```
-
-Khi `terraform apply` hỏi confirm, nhập:
-
-```text
-yes
-```
-
-Output mong đợi:
-
-```text
-Apply complete! Resources: 21 added, 0 changed, 0 destroyed.
-app_node_ip = "10.0.1.x"
-vpn_public_ip = "172.10.10.x"
-```
-
-Cần ghi lại:
-
-- `OPENSTACK_APP_IP`: ví dụ `10.0.1.245`
-- `OPENSTACK_VPN_FIP`: ví dụ `172.10.10.227`
-
-## 2. Terraform AWS
-
-Mục đích: tạo AWS WAF Node, AWS VPN Node, route AWS đến OpenStack app subnet qua ENI của AWS VPN Node.
-
-Terraform AWS dùng VPC/subnet/route table đã có sẵn trong account của người chạy. Không dùng lại ID trong môi trường của người khác. Tạo file biến riêng từ example:
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/terraform/aws
-cp terraform.tfvars.example terraform.tfvars
-nano terraform.tfvars
-```
-
-Các biến bắt buộc phải thay:
-
-```hcl
-aws_region     = "ap-southeast-1"
-vpc_id         = "vpc-..."
-subnet_id      = "subnet-..."
-route_table_id = "rtb-..."
-openstack_vpn_public_cidr = "<REAL_LAPTOP_WAN_IP>/32"
-```
-
-Ý nghĩa:
-
-- `vpc_id`: VPC sẽ chứa WAF Node và AWS VPN Node.
-- `subnet_id`: public subnet trong VPC đó. Subnet này nên có route `0.0.0.0/0` đi Internet Gateway.
-- `route_table_id`: route table gắn với public subnet. Terraform sẽ thêm route tới `openstack_app_cidr` qua ENI của AWS VPN Node.
-- `openstack_vpn_public_cidr`: public WAN/NAT IP thật của laptop/OpenStack AIO host, không phải OpenStack FIP `172.10.10.x`.
-- `public_key_path`: SSH public key dùng để tạo AWS key pair `aws_vpn_key`.
-
-Nếu dùng AWS CLI, có thể lấy ID như sau:
-
-```bash
-aws ec2 describe-vpcs \
-  --region <AWS_REGION> \
-  --query 'Vpcs[].{VpcId:VpcId,CidrBlock:CidrBlock,Name:Tags[?Key==`Name`]|[0].Value}' \
-  --output table
-
-aws ec2 describe-subnets \
-  --region <AWS_REGION> \
-  --filters Name=vpc-id,Values=<VPC_ID> \
-  --query 'Subnets[].{SubnetId:SubnetId,CidrBlock:CidrBlock,AZ:AvailabilityZone,PublicIp:MapPublicIpOnLaunch,Name:Tags[?Key==`Name`]|[0].Value}' \
-  --output table
-
-aws ec2 describe-route-tables \
-  --region <AWS_REGION> \
-  --filters Name=vpc-id,Values=<VPC_ID> \
-  --query 'RouteTables[].{RouteTableId:RouteTableId,Associations:Associations[].SubnetId,Routes:Routes[].DestinationCidrBlock}' \
-  --output table
-```
-
-Trong laptop AIO, OpenStack FIP `172.10.10.x` không phải public source trên Internet. Security group WireGuard trên AWS phải cho phép public source thật của laptop/router NAT. Lấy IP này bằng:
-
-```bash
-curl -fsS https://checkip.amazonaws.com
-```
-
-Sau khi VPN đã handshake, có thể kiểm chứng endpoint mà AWS thấy:
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/ansible
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible -i inventories/production/hosts.yml aws_vpn -b -m shell -a 'wg show wg0 endpoints'
-```
-
-Apply AWS:
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/terraform/aws
-terraform init
-terraform validate
-terraform apply
-terraform output
-```
-
-Output mong đợi:
-
-```text
-Apply complete! Resources: 8 added, 0 changed, 0 destroyed.
-vpn_public_ip = "x.x.x.x"
-vpn_private_ip = "172.31.x.x"
-waf_public_ip = "x.x.x.x"
-waf_private_ip = "172.31.x.x"
-vpn_network_interface_id = "eni-..."
-```
-
-Cần ghi lại:
-
-- `AWS_VPN_PUBLIC_IP`
-- `AWS_WAF_PUBLIC_IP`
-- `AWS_VPN_PRIVATE_IP`
-- `AWS_WAF_PRIVATE_IP`
-
-Trong trường hợp IP nhà mạng thay đổi, update lại biến `openstack_vpn_public_cidr` và chạy lại `terraform apply`, sau đó verify WireGuard handshake.
-
-## 3. Cập nhật Ansible inventory
-
-File inventory thật bị ignore bởi git:
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/ansible
-cp inventories/production/hosts.example.yml inventories/production/hosts.yml
-nano inventories/production/hosts.yml
-```
-
-Điền các giá trị:
-
-- `aws-vpn.ansible_host`: `AWS_VPN_PUBLIC_IP`
-- `openstack-vpn.ansible_host`: `OPENSTACK_VPN_FIP`
-- `openstack-vpn.wireguard_endpoint`: để chuỗi rỗng `""`
-- `aws-waf.ansible_host`: `AWS_WAF_PUBLIC_IP`
-- `openstack-app.ansible_host`: `OPENSTACK_APP_IP`
-
-Ý nghĩa của `wireguard_endpoint: ""`: khi sinh config cho AWS VPN Node, peer OpenStack không có `Endpoint = 172.10.10.x:51820`. AWS sẽ đợi OpenStack gửi gói đầu tiên, đúng với môi trường OpenStack AIO sau NAT. Ngược lại, config trên OpenStack VPN Node vẫn có endpoint AWS public IP.
-
-Nếu SSH vào App Node phải đi qua OpenStack VPN Node, dùng `ProxyCommand` rõ key:
-
-```yaml
-ansible_ssh_common_args: "-o ProxyCommand='ssh -i ~/.ssh/openstack_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@<OPENSTACK_VPN_FIP>'"
-```
-
-Kiểm tra inventory:
-
-```bash
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible -i inventories/production/hosts.yml all -m ping
-```
-
-Output mong đợi:
-
-```text
-aws-vpn | SUCCESS
-openstack-vpn | SUCCESS
-aws-waf | SUCCESS
-openstack-app | SUCCESS
-```
-
-Nếu App fail nhưng OpenStack VPN success, kiểm tra lại `ProxyCommand`.
-
-## 4. Cập nhật biến Ansible
-
-Mở file:
-
-```bash
-nano inventories/production/group_vars/all.yml
-```
-
-Cần đúng các giá trị quan trọng:
-
-```yaml
-app_backend_host: <OPENSTACK_APP_IP>
-openstack_vpn_app_ip: 10.0.1.254
-logstash_host: "{{ openstack_vpn_app_ip }}"
-logstash_port: 5044
-elasticsearch_host: 172.10.10.1
-elasticsearch_port: 9200
-```
-
-Ý nghĩa:
-
-- `app_backend_host`: IP App Node để Nginx WAF reverse proxy tới Juice Shop qua VPN.
-- `logstash_host`: địa chỉ Logstash trên OpenStack VPN Node. App Node đi nội bộ OpenStack; WAF Node đi qua WireGuard.
-- `elasticsearch_host`: địa chỉ laptop local trên `br-exnat`; Logstash trên OpenStack VPN Node ghi log về đây.
-
-## 5. Deploy local Elasticsearch/Kibana
-
-Mục đích: chạy Elasticsearch và Kibana trên laptop local. Logstash không chạy ở Docker local nữa.
-Kibana compose có các encryption key cố định để alerting có thể chạy ổn định sau restart.
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/elk
+cd /home/deployer/Downloads/Project/elk
 sudo sysctl -w vm.max_map_count=262144
 sudo docker compose up -d --remove-orphans
-sudo docker compose ps
 ```
 
-Output mong đợi:
+---
 
-```text
-siem-elasticsearch   Up ... healthy   172.10.10.1:9200->9200/tcp
-siem-kibana          Up ... healthy   127.0.0.1:5601->5601/tcp
-```
+## BƯỚC 6: Triển khai Toàn Bộ Dịch Vụ bằng Ansible Playbook
 
-Verify:
-
+Sử dụng playbook tổng `site.yml` để tự động hóa toàn bộ việc cấu hình VPN, Logstash, App Node và WAF Node theo đúng thứ tự:
 ```bash
-sudo docker exec siem-elasticsearch curl -fsS http://localhost:9200/_cluster/health?pretty
-sudo docker exec siem-kibana curl -fsS http://localhost:5601/api/status | head -c 1000
-```
-
-Output mong đợi:
-
-- Elasticsearch `status` là `green` hoặc `yellow`.
-- Kibana `overall.level` là `available`.
-
-## 6. Deploy WireGuard VPN gateways
-
-Mục đích: cài WireGuard + iptables trên AWS VPN Node và OpenStack VPN Node.
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/ansible
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible-playbook network_vpn.yml
-```
-
-Output mong đợi:
-
-```text
-PLAY RECAP
-aws-vpn       : failed=0 unreachable=0
-openstack-vpn : failed=0 unreachable=0
-```
-
-Kiểm tra WireGuard:
-
-```bash
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible -i inventories/production/hosts.yml vpn_gateways -b -m shell -a 'wg show; ip route'
-```
-
-Output tốt:
-
-- OpenStack peer có `endpoint: <AWS_VPN_PUBLIC_IP>:51820`.
-- AWS peer không cần hiện `endpoint` ban đầu, nhưng sau handshake sẽ học endpoint thực của OpenStack.
-- Có `latest handshake` và `transfer` tăng ở cả hai đầu.
-
-## 7. Deploy Logstash trên OpenStack VPN Node
-
-Mục đích: cài Logstash trực tiếp trên OpenStack VPN Node, lắng nghe Beats `0.0.0.0:5044`, ghi sang Elasticsearch local `172.10.10.1:9200`.
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/ansible
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible-playbook logstash_vpn.yml
-```
-
-Output mong đợi:
-
-```text
-PLAY RECAP
-openstack-vpn : failed=0 unreachable=0
-```
-
-Verify Logstash và đường ghi về Elasticsearch:
-
-```bash
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible -i inventories/production/hosts.yml openstack_vpn -b -m shell -a \
-'systemctl is-active logstash; ss -tlnp | grep :5044; curl -fsS http://172.10.10.1:9200/_cluster/health?pretty'
-```
-
-Output mong đợi:
-
-- `logstash` là `active`.
-- Có socket listen `:5044`.
-- Elasticsearch trả về JSON health.
-
-## 8. Deploy App Node và WAF Node
-
-Mục đích:
-
-- App Node: Docker + OWASP Juice Shop + Filebeat.
-- WAF Node: Nginx reverse proxy + Filebeat.
-- Filebeat hai node gửi về OpenStack VPN Node `10.0.1.254:5044`.
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/ansible
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible-playbook app.yml waf.yml
-```
-
-Output mong đợi:
-
-```text
-PLAY RECAP
-openstack-app : failed=0 unreachable=0
-aws-waf       : failed=0 unreachable=0
-```
-
-Kiểm tra App Node:
-
-```bash
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible -i inventories/production/hosts.yml app_nodes -b -m shell -a \
-'docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"; systemctl is-active filebeat; journalctl -u filebeat -n 30 --no-pager | grep -E "10.0.1.254:5044|established|Failed" || true'
-```
-
-Output mong đợi:
-
-- Có container `juiceshop`.
-- `filebeat` là `active`.
-- Log Filebeat có connection established đến `10.0.1.254:5044`.
-
-Kiểm tra WAF Node:
-
-```bash
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible -i inventories/production/hosts.yml waf_nodes -b -m shell -a \
-'nginx -t; systemctl is-active nginx; systemctl is-active filebeat; journalctl -u filebeat -n 30 --no-pager | grep -E "10.0.1.254:5044|established|Failed" || true'
-```
-
-Output mong đợi:
-
-- `nginx -t` successful.
-- `nginx` active.
-- `filebeat` active và kết nối được Logstash nếu WireGuard đã handshake.
-
-## 9. Verify ingestion vào Elasticsearch
-
-Tạo log mới:
-
-```bash
-curl -I --max-time 10 http://<AWS_WAF_PUBLIC_IP>/ || true
-```
-
-Kiểm tra index:
-
-```bash
-sudo docker exec siem-elasticsearch curl -fsS \
-  'http://localhost:9200/_cat/indices/siem-hybrid-*?v'
-```
-
-Output mong đợi:
-
-```text
-health status index                  docs.count
-yellow open   siem-hybrid-YYYY.MM.DD ...
-```
-
-Kiểm tra log App/WAF:
-
-```bash
-sudo docker exec siem-elasticsearch curl -fsS \
-  'http://localhost:9200/siem-hybrid-*/_search?filter_path=hits.total.value,aggregations.roles.buckets,aggregations.hosts.buckets' \
-  -H 'Content-Type: application/json' \
-  -d '{"size":0,"aggs":{"roles":{"terms":{"field":"fields.node_role.keyword","size":10}},"hosts":{"terms":{"field":"host.name.keyword","size":10}}}}'
-```
-
-Output mong đợi:
-
-```json
-{
-  "hits": {"total": {"value": 1}},
-  "aggregations": {
-    "roles": {
-      "buckets": [
-        {"key": "app", "doc_count": 1},
-        {"key": "waf", "doc_count": 1}
-      ]
-    }
-  }
-}
-```
-
-Số lượng `doc_count` tùy vào log thực tế, không cần trùng ví dụ.
-
-## 10. Provision Kibana data view, dashboard và alert
-
-Mục đích: tạo sẵn Kibana data view `siem-hybrid-*`, dashboard tổng quan và rule cảnh báo khi pipeline không có log mới trong 10 phút.
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/elk
-python3 kibana/provision_kibana.py
-```
-
-Output mong đợi:
-
-```text
-Provisioned Kibana data view, dashboard, and alert rule.
-Dashboard: http://127.0.0.1:5601/app/dashboards#/view/siem-hybrid-overview
-Data view: siem-hybrid-data-view
-Alert rule: SIEM Hybrid - no logs in 10 minutes
-```
-
-Verify bằng API:
-
-```bash
-curl -fsS http://127.0.0.1:5601/api/data_views -H 'kbn-xsrf: true'
-curl -fsS 'http://127.0.0.1:5601/api/saved_objects/_find?type=dashboard&search=SIEM%20Hybrid%20Overview&search_fields=title' -H 'kbn-xsrf: true'
-curl -fsS 'http://127.0.0.1:5601/api/alerting/rules/_find?search=SIEM%20Hybrid%20-%20no%20logs%20in%2010%20minutes&search_fields=name' -H 'kbn-xsrf: true'
-```
-
-## 11. Chạy tất cả bằng site.yml
-
-Sau khi inventory và `group_vars/all.yml` đúng, có thể chạy một lệnh:
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/ansible
+source ~/kolla-venv/bin/activate
+cd /home/deployer/Downloads/Project/ansible
 ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
 ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
 ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
 ansible-playbook site.yml
 ```
 
-Thứ tự trong `site.yml`:
+---
 
-1. `network_vpn.yml`
-2. `logstash_vpn.yml`
-3. `app.yml`
-4. `waf.yml`
+## BƯỚC 7: Xác Minh Hoạt Động Hệ Thống
 
-## 12. Debug nhanh
+1. **Kiểm tra Reverse Proxy & Kết nối qua VPN**:
+   ```bash
+   curl -sI http://<AWS_WAF_PUBLIC_IP>
+   ```
+   *(Mong đợi trả về `HTTP/1.1 200 OK` đi kèm header `X-Recruiting: /#/jobs` của Juice Shop).*
 
-Kiểm tra local OpenStack AIO bridge/NAT:
+2. **Kiểm tra ModSecurity WAF**:
+   ```bash
+   curl -i "http://<AWS_WAF_PUBLIC_IP>/?id='foo'%20or%201=1"
+   ```
+   *(Mong đợi trả về `HTTP/1.1 403 Forbidden` thể hiện ModSecurity đã chặn thành công).*
 
-```bash
-ip -br addr | grep -E 'br-exnat|veth|wlp0s20f3'
-sudo iptables -t nat -S | grep 172.10.10 || true
-sudo iptables -S FORWARD | grep -E 'br-exnat|wlp0s20f3' || true
-```
-
-Kiểm tra WireGuard:
-
-```bash
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible -i inventories/production/hosts.yml vpn_gateways -b -m shell -a \
-'wg show; ip route; iptables -S; iptables -t nat -S'
-```
-
-Đọc kết quả:
-
-- Có `latest handshake`: VPN đang thông.
-- `0 B received`: chưa có UDP hai chiều; kiểm tra AWS SG UDP/51820 và OpenStack VPN có endpoint AWS public IP.
-- AWS VPN peer không có endpoint cố định là bình thường trong lab này.
-
-Kiểm tra Logstash trên OpenStack VPN Node:
-
-```bash
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible -i inventories/production/hosts.yml openstack_vpn -b -m shell -a \
-'systemctl status logstash --no-pager; journalctl -u logstash -n 80 --no-pager'
-```
-
-Kiểm tra Filebeat App:
-
-```bash
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible -i inventories/production/hosts.yml app_nodes -b -m shell -a \
-'systemctl is-active filebeat; journalctl -u filebeat -n 50 --no-pager | grep -E "10.0.1.254:5044|established|Failed" || true'
-```
-
-Kiểm tra Filebeat WAF:
-
-```bash
-ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
-ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
-ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
-ansible -i inventories/production/hosts.yml waf_nodes -b -m shell -a \
-'systemctl is-active filebeat; journalctl -u filebeat -n 50 --no-pager | grep -E "10.0.1.254:5044|established|Failed" || true'
-```
-
-## 13. Stop / clean local SIEM
-
-Dừng Elasticsearch/Kibana local:
-
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM/elk
-sudo docker compose down
-```
-
-Xóa cả Elasticsearch data volume:
-
-```bash
-sudo docker compose down -v
-```
-
-Cẩn thận: `down -v` xóa index `siem-hybrid-*`.
+3. **Kiểm tra Log Nhận Được trong Elasticsearch**:
+   ```bash
+   curl -s -X GET "http://172.10.10.1:9200/siem-hybrid-*/_search?pretty" -H 'Content-Type: application/json' -d'
+   {
+     "size": 0,
+     "aggs": {
+       "node_roles": {
+         "terms": {
+           "field": "fields.node_role.keyword"
+         }
+       }
+     }
+   }'
+   ```
+   *(Mong đợi trả về danh sách phân bổ log gồm cả hai node `app` và `waf`).*

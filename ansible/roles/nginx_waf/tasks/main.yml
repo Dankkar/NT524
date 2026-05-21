@@ -177,6 +177,7 @@
     dest: /opt/waf-nginx/modsec/coreruleset
     version: v4.0.0
     depth: 1
+    recursive: no
 
 - name: Copy OWASP CRS main configuration
   ansible.builtin.copy:
@@ -214,6 +215,8 @@
     owner: root
     group: root
     mode: "0644"
+  notify: Reload Nginx
+
 
 # --- ECR AUTHENTICATION AND RUN CONTAINER ---
 
