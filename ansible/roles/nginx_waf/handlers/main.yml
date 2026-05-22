@@ -3,6 +3,8 @@
   ansible.builtin.command:
     cmd: docker exec waf-nginx nginx -s reload
   ignore_errors: true
+  tags:
+    - update_rules
 
 - name: Restart Nginx
   ansible.builtin.command:
