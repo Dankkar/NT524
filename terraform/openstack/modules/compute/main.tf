@@ -5,7 +5,7 @@ terraform {
     }
   }
 }
-resource "openstack_compute_keypair_v2" "my_key" {
+resource "openstack_compute_keypair_v2" "openstack_key" {
   name       = var.keypair_name
   public_key = file(var.public_key_path)
 }
@@ -14,7 +14,7 @@ resource "openstack_compute_instance_v2" "app_node" {
   name            = var.app_node_name
   image_name      = var.image_name
   flavor_name     = var.flavor_name
-  key_pair        = openstack_compute_keypair_v2.my_key.name
+  key_pair        = openstack_compute_keypair_v2.openstack_key.name
   security_groups = [var.app_sg_id]
 
   network {
@@ -56,7 +56,7 @@ resource "openstack_compute_instance_v2" "vpn_gateway" {
   name            = var.vpn_node_name
   image_name      = var.image_name
   flavor_name     = var.flavor_name
-  key_pair        = openstack_compute_keypair_v2.my_key.name
+  key_pair        = openstack_compute_keypair_v2.openstack_key.name
   security_groups = [var.vpn_sg_id]
 
   # Mạng ra Internet

@@ -12,19 +12,19 @@ variable "floating_ip_pool" {
 variable "keypair_name" {
   description = "Name of the OpenStack SSH Keypair"
   type        = string
-  default     = "vpn_key"
+  default     = "openstack_key"
 }
 
 variable "public_key_path" {
   description = "Path to the SSH public key file"
   type        = string
-  default     = "~/.ssh/vpn_key.pub"
+  default     = "~/.ssh/openstack_key.pub"
 }
 
 variable "image_name" {
   description = "Image name for both virtual machines"
   type        = string
-  default     = "ubuntu22.04"
+  default     = "Ubuntu-24.04"
 }
 
 variable "flavor_name" {

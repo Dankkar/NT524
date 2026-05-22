@@ -32,8 +32,10 @@ ansible/inventories/**/hosts.yml
 ansible/inventories/**/hosts.yaml
 ansible/inventories/**/hosts.local.yml
 ansible/inventories/**/hosts.local.yaml
+ansible/inventories/production/group_vars/all.yml
 !ansible/inventories/**/hosts.example.yml
 !ansible/inventories/**/hosts.example.yaml
+!ansible/inventories/production/group_vars/all.example.yml
 
 # --- SSH / cloud credentials ---
 *.pem
