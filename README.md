@@ -282,12 +282,10 @@ git push origin main
 *Vào tab **Actions** trên GitHub để theo dõi quy trình build, quét Trivy và Deploy tự động.*
 
 ### Bước 3: Chu trình Retrain Mô hình & Cập nhật luật ML (Zero Downtime)
-Yêu cầu, phải hoàn tất các bước trong SIEM/Local_ML.md trước đó.Khi thực hiện huấn luyện lại mô hình ML thành công ở máy local:
+Yêu cầu, phải hoàn tất các bước trong Local_ML.md trước đó. Khi thực hiện huấn luyện lại mô hình ML thành công ở máy local:
 1.  Chạy script trích xuất luật tối ưu từ mô hình của bạn:
     ```bash
-    cp -r ~/modsec-learn .
-    cp scripts/*.py modsec-learn/scripts/
-    python3 modsec-learn/scripts/export_tuned_rules.py
+    python3 modsec-learn/scripts/export_tuned_rules.py --model linear_svc_pl4_l1.joblib
     ```
     *Script này sẽ tự động ghi đè tệp luật loại trừ mới vào thư mục local:* `ansible/roles/nginx_waf/files/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf`.
 2.  Chạy playbook Ansible để đẩy luật mới lên WAF cực nhanh (chỉ mất 2 giây):
@@ -305,7 +303,6 @@ Yêu cầu, phải hoàn tất các bước trong SIEM/Local_ML.md trước đó
 
 ### Bước 4: Kiểm tra trạng thái hoạt động trên AWS WAF Node
 Đăng nhập SSH vào máy chủ AWS WAF Node và chạy các lệnh kiểm tra:
-
 *   **Xem tài nguyên tiêu hao thực tế (Live Stats):**
     ```bash
     docker stats waf-nginx
@@ -318,6 +315,7 @@ Yêu cầu, phải hoàn tất các bước trong SIEM/Local_ML.md trước đó
     ```bash
     docker exec waf-nginx nginx -T | grep -i modsecurity
     ```
+
 ---
 
 ## 6. Thiết lập Cảnh báo (Alerting) & Phản hồi SOC (Feedback Loop)
@@ -339,7 +337,7 @@ Giao diện quản lý sự cố tương tác sẽ khả dụng tại **`http://
 Nếu không cấu hình các dịch vụ Webhook ngoài (Slack/Discord), bạn nên ghi nhận cảnh báo vào một Elasticsearch Index riêng biệt:
 1.  Truy cập Kibana Dashboard, vào **Stack Management** -> **Rules** -> click **Create rule**.
 2.  Chọn loại rule **Elasticsearch query** -> Chọn **Query DSL**
-3.  Cấu hình Index Pattern / Data View là `siem-hybrid-*`.
+3.  Cấu hình Index Pattern / Data View là **`siem-waf-access-*`**.
 4.  Cấu hình trường thời gian (Time field) là **`@timestamp`**.
 5.  Định nghĩa bộ lọc (Query DSL):
 ```json
@@ -354,7 +352,7 @@ Nếu không cấu hình các dịch vụ Webhook ngoài (Slack/Discord), bạn 
                 },
                 {
                     "query_string": {
-                        "query": "message: *403*"
+                        "query": "status_code: 403"
                     }
                 }
             ]
@@ -377,81 +375,36 @@ Nếu không cấu hình các dịch vụ Webhook ngoài (Slack/Discord), bạn 
 ```
 
 ### C. Thiết lập Dashboard Giám sát trên Kibana Lens
-#### 1. Trích xuất địa chỉ IP người dùng (Runtime Field)
-Vì IP client nằm bên trong log `message` thô, hãy tạo trường ảo `waf_client_ip`:
-1.  Vào **Stack Management** -> **Data Views** -> Chọn `siem-hybrid-*`.
-2.  Click **Create field** ở góc phải trên:
-    *   **Name:** `waf_client_ip`
-    *   **Type:** `Keyword`
-    *   **Painless script:**
-```bash
-String msg = params['_source']['message'];
+Do log đã được Logstash parse trực tiếp thành các trường có cấu trúc, bạn không cần dùng Painless script để trích xuất thủ công như trước.
 
-if (msg != null) {
-  int marker = msg.indexOf("HTTP/1.1");
-
-  if (marker != -1) {
-    int quoteEnd = msg.indexOf("\\\"", marker);
-
-    if (quoteEnd != -1) {
-      int statusStart = quoteEnd + 3;
-      int statusEnd = msg.indexOf(" ", statusStart);
-
-      if (statusEnd != -1) {
-        emit(msg.substring(statusStart, statusEnd));
-        return;
-      }
-    }
-  }
-}
-
-emit("unknown");
-```
-*   **Name:** `waf_status`
-*   **Type:** `Keyword`
-*   **Painless script:**
-```bash
-String msg = params['_source']['message'];
-
-if (msg != null) {
-  int marker = msg.indexOf("HTTP/1.1");
-
-  if (marker != -1) {
-    int quoteEnd = msg.indexOf("\\\"", marker);
-
-    if (quoteEnd != -1) {
-      int statusStart = quoteEnd + 3;
-      int statusEnd = msg.indexOf(" ", statusStart);
-
-      if (statusEnd != -1) {
-        emit(msg.substring(statusStart, statusEnd));
-        return;
-      }
-    }
-  }
-}
-
-emit("unknown");
-```
+#### 1. Các trường dữ liệu đã được parse sẵn:
+*   **`client_ip`**: Địa chỉ IP gốc của người dùng (trích xuất từ `x_forwarded_for` hoặc `client`).
+*   **`status_code`**: Mã trạng thái phản hồi HTTP (đã được ép kiểu sang Integer để lọc).
+*   **`request_path`**: Đường dẫn URL chi tiết (URI).
+*   **`time_local`**: Thời gian hệ thống ghi nhận log.
 
 #### 2. Xây dựng trang giám sát bảo mật & sức khỏe hệ thống
 Vào **Analytics** -> **Dashboard** -> click **Create dashboard** và thêm các Widget sau:
 *   **Tổng số cuộc tấn công bị chặn (Metric):**
-    *   Filter: `fields.node_role : "waf" and waf_status : "403"`
+    *   Data View: `SIEM - WAF Access` (`siem-waf-access-*`)
+    *   Filter: `status_code : 403`
     *   Primary metric: `Count of records`
 *   **Top IP Tấn công (Data Table):**
-    *   Filter: `fields.node_role : "waf" and waf_status : "403"`
-    *   Rows: Kéo thả trường `waf_client_ip`
+    *   Data View: `SIEM - WAF Access` (`siem-waf-access-*`)
+    *   Filter: `status_code : 403`
+    *   Rows: Kéo thả trường `client_ip`
     *   Metric: `Count of records`
 *   **Tần suất chặn theo thời gian (Line/Area Chart):**
-    *   Filter: `fields.node_role : "waf" and waf_status : "403"`
-    *   X-axis: `@timestamp` | Y-axis: `Count of records` | Breakdown: `waf_client_ip`
+    *   Data View: `SIEM - WAF Access` (`siem-waf-access-*`)
+    *   Filter: `status_code : 403`
+    *   X-axis: `@timestamp` | Y-axis: `Count of records` | Breakdown: `client_ip`
 *   **Tỉ lệ mã trạng thái HTTP tại WAF Proxy (Donut Chart):**
-    *   Filter: `fields.node_role : "waf"`
-    *   Metric: `Count of records` | Slice by: `waf_status`
+    *   Data View: `SIEM - WAF Access` (`siem-waf-access-*`)
+    *   Metric: `Count of records` | Slice by: `status_code`
 *   **Kiểm toán đăng nhập SSH (Data Table):**
-    *   Filter: `message.keyword : *Accepted\ publickey* or message.keyword : *Accepted\ password*`
-    *   Rows: `@timestamp`, `host.name.keyword`, `message.keyword`
+    *   Data View: `SIEM - Syslog` (`siem-syslog-*`)
+    *   Filter: `message : "Accepted"`
+    *   Rows: `@timestamp`, `host.name`, `message`
 
 ---
 
@@ -488,6 +441,26 @@ Sau khi thu thập đủ dữ liệu feedback và phân tách các log từ máy
     ansible-playbook -i inventories/production/hosts.yml waf.yml
     ```
     *Ansible tự động sao chép tệp luật loại trừ mới lên máy chủ AWS và ra lệnh nạp lại cấu hình Nginx (`nginx -s reload`) giúp luật có hiệu lực ngay lập tức với zero-downtime.*
+
+---
+
+## 8. Cải tiến kiến trúc & Điều chỉnh Hệ thống (Bổ sung mới)
+
+Trong quá trình hoàn thiện hạ tầng, các thay đổi quan trọng sau đã được tích hợp nhằm tối ưu hóa vòng lặp thu thập - huấn luyện - phản hồi:
+
+### A. Phân Tách Layer Dữ Liệu Log (Index Separation)
+Hệ thống log thô trước đây được Logstash đẩy dồn về một index duy nhất (`siem-hybrid-*`). Hiện tại, luồng Logstash pipeline đã được tái cấu trúc thành 3 index riêng biệt:
+1.  **`siem-waf-access-*`**: Ghi nhận Nginx access log kèm mã chặn ModSecurity 403 từ AWS WAF.
+2.  **`siem-app-access-*`**: Ghi nhận log console (stdout) của ứng dụng Juice Shop từ OpenStack App Node.
+3.  **`siem-syslog-*`**: Ghi nhận log hệ thống của toàn bộ VM.
+
+### B. Whitelist Kết Nối socket.io (ModSecurity Exclusions)
+Ứng dụng Juice Shop sử dụng `socket.io` chạy ngầm. Giao thức này gửi request POST dạng `text/plain` và đi kèm IP public trực tiếp, vi phạm 2 luật CRS `920350` (Host là IP) và `920420` (Content-type không hợp lệ).
+*   **Giải pháp**: Thêm Exclusion Rule `10001` vào `RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf` để tự động whitelist 2 rule trên đối với tất cả các request bắt đầu bằng `/socket.io/`, khắc phục triệt để lỗi 403 giả lập.
+
+### C. Chuẩn Hóa Định Dạng Log & Đồng Bộ API
+*   Nginx WAF sử dụng log format `main` tích hợp chi tiết `$request_time` và `$x_forwarded_for`.
+*   Các script `extract_logs.py` và `feedback_api.py` được tối ưu hóa để truy vấn đúng index `siem-waf-access-*` và ưu tiên trích xuất trực tiếp các trường cấu trúc do Logstash cung cấp, đảm bảo hiệu năng và tính ổn định.
 
 ---
 
