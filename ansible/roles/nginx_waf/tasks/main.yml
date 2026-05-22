@@ -216,6 +216,8 @@
     group: root
     mode: "0644"
   notify: Reload Nginx
+  tags:
+    - update_rules
 
 
 # --- ECR AUTHENTICATION AND RUN CONTAINER ---
@@ -228,7 +230,7 @@
 
 - name: Authenticate Docker with AWS ECR
   ansible.builtin.shell: |
-    aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com
+    aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin {{ waf_image.split('/')[0] }}
   changed_when: false
 
 - name: Pull WAF image from ECR
