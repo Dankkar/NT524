@@ -7,16 +7,175 @@ input {
 }
 
 filter {
+  # ─── Shared: tag pipeline ───────────────────────────────────────────────────
   mutate {
-    add_field => {
-      "siem_pipeline" => "hybrid-filebeat"
+    add_field => { "siem_pipeline" => "hybrid-filebeat" }
+  }
+
+  # ─── Docker json-file wrapper decode ────────────────────────────────────────
+  # Filebeat filestream does NOT auto-decode docker's json-file format.
+  # Each message looks like: {"log":"<actual log line>\n","stream":"stdout","time":"..."}
+  # We decode it here and promote the inner "log" field to "message".
+  if [fields][log_type] == "docker_container" {
+    json {
+      source  => "message"
+      target  => "docker"
+      tag_on_failure => ["_docker_json_parse_failure"]
     }
+
+    if "_docker_json_parse_failure" not in [tags] and [docker][log] {
+      mutate {
+        replace => { "message" => "%{[docker][log]}" }
+        add_field => { "docker_stream" => "%{[docker][stream]}" }
+      }
+      # Strip trailing newline from docker log lines
+      mutate {
+        gsub => [ "message", "\n$", "" ]
+      }
+    }
+  }
+
+  # ─── WAF node: nginx access log ─────────────────────────────────────────────
+  if [fields][node_role] == "waf" and [fields][log_type] == "docker_container" {
+
+    # Try nginx access log format:
+    # $remote_addr - $remote_user [$time_local] "$request"
+    # $status $bytes "$referer" "$ua" "$x_fwd" $request_time
+    grok {
+      match => {
+        "message" => [
+          "%{IPORHOST:client_ip} - %{DATA:remote_user} \[%{HTTPDATE:time_local}\] \"%{WORD:http_method} %{URIPATHPARAM:request_path} HTTP/%{NUMBER:http_version}\" %{NUMBER:status_code:int} %{NUMBER:bytes_sent:int} \"%{DATA:http_referer}\" \"%{DATA:user_agent}\" \"%{DATA:x_forwarded_for}\" %{NUMBER:request_time:float}",
+          "%{IPORHOST:client_ip} - %{DATA:remote_user} \[%{HTTPDATE:time_local}\] \"%{GREEDYDATA:raw_request}\" %{NUMBER:status_code:int} %{NUMBER:bytes_sent:int} \"%{DATA:http_referer}\" \"%{DATA:user_agent}\" \"%{DATA:x_forwarded_for}\""
+        ]
+      }
+      tag_on_failure => ["_waf_access_grok_failure"]
+    }
+
+    if [time_local] {
+      date {
+        match  => [ "time_local", "dd/MMM/yyyy:HH:mm:ss Z" ]
+        target => "@timestamp"
+        remove_field => ["time_local"]
+      }
+    }
+
+    # nginx error log (ModSecurity audit)
+    if "_waf_access_grok_failure" in [tags] {
+      grok {
+        match => {
+          "message" => [
+            "%{YEAR}/%{MONTHNUM}/%{MONTHDAY} %{TIME} \[%{LOGLEVEL:log_level}\] %{GREEDYDATA:error_detail}"
+          ]
+        }
+        tag_on_failure => []
+      }
+
+      # Extract ModSecurity fields from error detail
+      grok {
+        match => {
+          "error_detail" => [
+            "ModSecurity: Access denied with code %{NUMBER:modsec_response_code}.*\[id \"%{NUMBER:modsec_rule_id}\"\].*\[msg \"%{DATA:modsec_msg}\"\].*request: \"%{WORD:http_method} %{URIPATHPARAM:request_path} HTTP/%{NUMBER:http_version}\""
+          ]
+        }
+        tag_on_failure => []
+      }
+
+      if [log_level] { mutate { add_tag => ["nginx_error_log"] } }
+      if [modsec_rule_id] {
+        mutate { add_tag => ["modsec_blocked", "waf_blocked"] }
+      }
+    }
+
+    if [status_code] {
+      mutate { convert => { "status_code" => "integer" } }
+    }
+
+    if [status_code] == 403 or "modsec_blocked" in [tags] {
+      mutate { add_tag => ["waf_blocked"] }
+    }
+    if [status_code] and [status_code] >= 500 {
+      mutate { add_tag => ["server_error"] }
+    }
+
+    mutate { add_field => { "log_source_index" => "siem-waf-access" } }
+  }
+
+  # ─── App node: Juice Shop container log ─────────────────────────────────────
+  else if [fields][node_role] == "app" and [fields][log_type] == "docker_container" {
+    # Juice Shop uses Morgan / custom logger which emits plain text or JSON
+    json {
+      source  => "message"
+      target  => "app"
+      tag_on_failure => ["_app_json_parse_failure"]
+    }
+
+    if "_app_json_parse_failure" in [tags] {
+      grok {
+        match => {
+          "message" => [
+            "%{IPORHOST:client_ip} - - \[%{HTTPDATE:time_local}\] \"%{WORD:http_method} %{URIPATHPARAM:request_path} HTTP/%{NUMBER:http_version}\" %{NUMBER:status_code:int} %{NUMBER:bytes_sent:int}"
+          ]
+        }
+        tag_on_failure => []
+      }
+    }
+
+    mutate { add_field => { "log_source_index" => "siem-app-access" } }
+  }
+
+  # ─── Syslog ─────────────────────────────────────────────────────────────────
+  else if [fields][log_type] == "syslog" {
+    grok {
+      match => {
+        "message" => [
+          "%{SYSLOGTIMESTAMP:syslog_timestamp} %{SYSLOGHOST:syslog_host} %{PROG:syslog_program}(?:\[%{POSINT:syslog_pid}\])?: %{GREEDYDATA:syslog_message}",
+          "%{GREEDYDATA:syslog_raw}"
+        ]
+      }
+      tag_on_failure => ["_syslog_grok_failure"]
+    }
+
+    if [syslog_timestamp] {
+      date {
+        match  => [ "syslog_timestamp", "MMM  d HH:mm:ss", "MMM dd HH:mm:ss" ]
+        target => "@timestamp"
+        remove_field => ["syslog_timestamp"]
+      }
+    }
+
+    if [syslog_message] =~ /(?i)(error|crit|alert|emerg|fail|panic)/ or
+       [syslog_raw]     =~ /(?i)(error|crit|alert|emerg|fail|panic)/ {
+      mutate { add_tag => ["syslog_high_severity"] }
+    }
+
+    mutate { add_field => { "log_source_index" => "siem-syslog" } }
+  }
+
+  else {
+    mutate { add_field => { "log_source_index" => "siem-other" } }
   }
 }
 
 output {
-  elasticsearch {
-    hosts => ["http://{{ elasticsearch_host }}:{{ elasticsearch_port }}"]
-    index => "siem-hybrid-%{+YYYY.MM.dd}"
+  if [log_source_index] == "siem-waf-access" {
+    elasticsearch {
+      hosts => ["http://{{ elasticsearch_host }}:{{ elasticsearch_port }}"]
+      index => "siem-waf-access-%{+YYYY.MM.dd}"
+    }
+  } else if [log_source_index] == "siem-app-access" {
+    elasticsearch {
+      hosts => ["http://{{ elasticsearch_host }}:{{ elasticsearch_port }}"]
+      index => "siem-app-access-%{+YYYY.MM.dd}"
+    }
+  } else if [log_source_index] == "siem-syslog" {
+    elasticsearch {
+      hosts => ["http://{{ elasticsearch_host }}:{{ elasticsearch_port }}"]
+      index => "siem-syslog-%{+YYYY.MM.dd}"
+    }
+  } else {
+    elasticsearch {
+      hosts => ["http://{{ elasticsearch_host }}:{{ elasticsearch_port }}"]
+      index => "siem-hybrid-%{+YYYY.MM.dd}"
+    }
   }
 }

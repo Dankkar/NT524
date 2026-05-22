@@ -7,7 +7,7 @@ import re
 
 PORT = 5005
 DATASET_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data/dataset"))
-ES_URL = "http://172.10.10.1:9200/siem-hybrid-*/_search"
+ES_URL = "http://172.10.10.1:9200/siem-waf-access-*/_search"
 
 def fetch_recent_blocked_logs():
     # Query Elasticsearch for the last 1000 WAF logs
@@ -40,26 +40,38 @@ def fetch_recent_blocked_logs():
                 source = hit.get("_source", {})
                 message_raw = source.get("message", "")
                 
-                # Parse Nginx log line from JSON nested format
-                try:
-                    message_json = json.loads(message_raw)
-                    log_line = message_json.get("log", "").strip()
-                except Exception:
-                    log_line = message_raw.strip()
+                # Check if fields are already parsed by Logstash
+                client_ip = source.get("client_ip")
+                uri = source.get("request_path")
+                status_code = source.get("status_code")
+                timestamp = source.get("time_local") or source.get("time") # standard time fields
                 
-                # Nginx access log parsing regex
-                pattern = r'^(\S+) - \S+ \[(.*?)\] "(\S+) (\S+) \S+" (\d+)'
-                match = re.match(pattern, log_line)
-                if match:
-                    client_ip = match.group(1)
-                    timestamp = match.group(2)
-                    uri = match.group(4)
-                    status_code = int(match.group(5))
+                if client_ip is not None and uri is not None and status_code is not None:
+                    # Successfully parsed by Logstash
+                    status_code = int(status_code)
+                    if not timestamp:
+                        timestamp = source.get("@timestamp", "Unknown")
                 else:
-                    client_ip = "Unknown"
-                    timestamp = source.get("@timestamp", "Unknown")
-                    uri = log_line
-                    status_code = 0
+                    # Fallback to regex parsing of the message
+                    try:
+                        message_json = json.loads(message_raw)
+                        log_line = message_json.get("log", "").strip()
+                    except Exception:
+                        log_line = message_raw.strip()
+                    
+                    # Nginx access log parsing regex
+                    pattern = r'^(\S+) - \S+ \[(.*?)\] "(\S+) (\S+) \S+" (\d+)'
+                    match = re.match(pattern, log_line)
+                    if match:
+                        client_ip = match.group(1)
+                        timestamp = match.group(2)
+                        uri = match.group(4)
+                        status_code = int(match.group(5))
+                    else:
+                        client_ip = "Unknown"
+                        timestamp = source.get("@timestamp", "Unknown")
+                        uri = log_line
+                        status_code = 0
                 
                 # Extract query payload
                 parsed_uri = urllib.parse.urlparse(uri)

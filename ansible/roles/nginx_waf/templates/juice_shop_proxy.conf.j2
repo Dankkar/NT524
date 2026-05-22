@@ -2,7 +2,7 @@ server {
     listen 80 default_server;
     server_name {{ nginx_server_name }};
 
-    access_log {{ nginx_access_log }};
+    access_log {{ nginx_access_log }} main;
     error_log {{ nginx_error_log }};
 
     # Enable ModSecurity WAF

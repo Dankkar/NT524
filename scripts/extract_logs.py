@@ -4,7 +4,7 @@ import urllib.parse
 import re
 import os
 
-ES_URL = "http://172.10.10.1:9200/siem-hybrid-*/_search"
+ES_URL = "http://172.10.10.1:9200/siem-waf-access-*/_search"
 DATASET_DIR = os.path.join(os.path.dirname(__file__), "../data/dataset")
 
 def fetch_es_logs():
@@ -79,16 +79,30 @@ def main():
     
     for hit in hits:
         source = hit.get("_source", {})
-        message_raw = source.get("message", "")
         
-        # Log is stored inside a JSON string under message: {"log": "...", "stream": "stdout"}
-        try:
-            message_json = json.loads(message_raw)
-            log_line = message_json.get("log", "").strip()
-        except Exception:
-            log_line = message_raw.strip()
+        # Check if fields are already parsed by Logstash
+        client_ip = source.get("client_ip")
+        status_code = source.get("status_code")
+        uri = source.get("request_path")
+        
+        if client_ip is not None and uri is not None and status_code is not None:
+            parsed = {
+                "client_ip": client_ip,
+                "request_uri": uri,
+                "status": int(status_code)
+            }
+        else:
+            message_raw = source.get("message", "")
             
-        parsed = parse_nginx_log(log_line)
+            # Log is stored inside a JSON string under message: {"log": "...", "stream": "stdout"}
+            try:
+                message_json = json.loads(message_raw)
+                log_line = message_json.get("log", "").strip()
+            except Exception:
+                log_line = message_raw.strip()
+                
+            parsed = parse_nginx_log(log_line)
+            
         if not parsed:
             continue
             

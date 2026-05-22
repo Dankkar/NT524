@@ -18,7 +18,7 @@ wireguard_openstack_app_nat_source_cidrs:
   - "{{ aws_vpc_cidr }}"
   - "{{ wireguard_cidr }}"
 
-app_backend_host: 10.0.1.185
+app_backend_host: 10.0.1.237
 app_backend_port: 80
 juice_shop_image: bkimminich/juice-shop
 juice_shop_container_name: juiceshop

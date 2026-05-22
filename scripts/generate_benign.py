@@ -6,7 +6,7 @@ import urllib.parse
 import urllib.error
 
 # WAF Public IP
-WAF_IP = "54.254.229.116"
+WAF_IP = "3.1.159.30"
 
 paths = [
     "/",
