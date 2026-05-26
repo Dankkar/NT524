@@ -17,11 +17,13 @@ module "compute" {
   subnet_id                = module.network.public_subnet_id
   waf_sg_id                = module.security_group.waf_sg_id
   vpn_sg_id                = module.security_group.vpn_sg_id
+  app_sg_id                = module.security_group.app_sg_id
   public_key_path          = var.public_key_path
   keypair_name             = var.keypair_name
   instance_type            = var.instance_type
   vpn_node_name            = var.vpn_node_name
   waf_node_name            = var.waf_node_name
+  app_node_name            = var.app_node_name
   waf_iam_instance_profile = aws_iam_instance_profile.waf_ec2.name
 }
 

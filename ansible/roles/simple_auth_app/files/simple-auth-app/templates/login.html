@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel login">
+  <h1>Hybrid Auth App</h1>
+  {% if dev_login_enabled %}
+  <form method="post" class="form">
+    <label>Email<input name="email" type="email" autocomplete="email" required></label>
+    <label>Display name<input name="name" autocomplete="name"></label>
+    <button type="submit">Sign in</button>
+  </form>
+  {% else %}
+  <p class="muted">Authentication is handled by the access gateway.</p>
+  {% endif %}
+</section>
+{% endblock %}

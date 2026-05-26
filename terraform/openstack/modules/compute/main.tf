@@ -15,14 +15,14 @@ resource "openstack_compute_instance_v2" "app_node" {
   image_name      = var.image_name
   flavor_name     = var.flavor_name
   key_pair        = openstack_compute_keypair_v2.openstack_key.name
-  security_groups = [var.app_sg_id]
+  security_groups = [var.app_sg_name]
 
   network {
     uuid = var.app_network_id
   }
 
-  # Đảm bảo VPN Gateway được tạo trước để cấu hình NAT xong xuôi
-  depends_on = [openstack_compute_instance_v2.vpn_gateway]
+  # WAF is the default gateway into the app/database network.
+  depends_on = [openstack_compute_instance_v2.vpn_gateway, openstack_compute_instance_v2.waf_node]
 
   user_data = <<-EOF
                 #!/bin/bash
@@ -37,14 +37,103 @@ resource "openstack_compute_instance_v2" "app_node" {
                 EOF
 }
 
-resource "openstack_networking_port_v2" "vpn_app_port" {
-  name               = "${var.vpn_node_name}_app_port"
+resource "openstack_networking_port_v2" "waf_transit_port" {
+  name               = "${var.waf_node_name}_transit_port"
+  network_id         = var.waf_network_id
+  security_group_ids = [var.waf_sg_id]
+
+  fixed_ip {
+    subnet_id  = var.waf_subnet_id
+    ip_address = var.waf_transit_ip
+  }
+
+  allowed_address_pairs {
+    ip_address = "0.0.0.0/0"
+  }
+}
+
+resource "openstack_networking_port_v2" "waf_app_port" {
+  name               = "${var.waf_node_name}_app_port"
   network_id         = var.app_network_id
-  security_group_ids = [var.vpn_sg_id]
+  security_group_ids = [var.waf_sg_id]
 
   fixed_ip {
     subnet_id  = var.app_subnet_id
     ip_address = var.vpn_app_ip
+  }
+
+  allowed_address_pairs {
+    ip_address = "0.0.0.0/0"
+  }
+}
+
+resource "openstack_compute_instance_v2" "waf_node" {
+  name            = var.waf_node_name
+  image_name      = var.image_name
+  flavor_name     = var.flavor_name
+  key_pair        = openstack_compute_keypair_v2.openstack_key.name
+  security_groups = [var.waf_sg_name]
+
+  network {
+    port = openstack_networking_port_v2.waf_transit_port.id
+  }
+
+  network {
+    port = openstack_networking_port_v2.waf_app_port.id
+  }
+
+  depends_on = [openstack_compute_instance_v2.vpn_gateway]
+
+  user_data = <<-EOF
+                #!/bin/bash
+                sleep 30
+                ip route del 8.8.8.8 || true
+                ip route del 8.8.4.4 || true
+
+                ip route del default || true
+                ip route add default via ${var.vpn_waf_ip}
+
+                echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+                sysctl -p
+
+                echo "nameserver 8.8.8.8" > /etc/resolv.conf
+                EOF
+}
+
+resource "openstack_compute_instance_v2" "db_node" {
+  name            = var.db_node_name
+  image_name      = var.image_name
+  flavor_name     = var.flavor_name
+  key_pair        = openstack_compute_keypair_v2.openstack_key.name
+  security_groups = [var.db_sg_name]
+
+  network {
+    uuid = var.app_network_id
+  }
+
+  depends_on = [openstack_compute_instance_v2.vpn_gateway, openstack_compute_instance_v2.waf_node]
+
+  user_data = <<-EOF
+                #!/bin/bash
+                sleep 30
+                ip route del 8.8.8.8 || true
+                ip route del 8.8.4.4 || true
+
+                ip route del default || true
+                ip route add default via ${var.vpn_app_ip}
+
+                echo "nameserver 8.8.8.8" > /etc/resolv.conf
+                EOF
+}
+
+resource "openstack_networking_port_v2" "vpn_waf_port" {
+  name               = "${var.vpn_node_name}_waf_port"
+  network_id         = var.waf_network_id
+  security_group_ids = [var.vpn_sg_id]
+
+  fixed_ip {
+    subnet_id  = var.waf_subnet_id
+    ip_address = var.vpn_waf_ip
   }
 
   allowed_address_pairs {
@@ -57,16 +146,16 @@ resource "openstack_compute_instance_v2" "vpn_gateway" {
   image_name      = var.image_name
   flavor_name     = var.flavor_name
   key_pair        = openstack_compute_keypair_v2.openstack_key.name
-  security_groups = [var.vpn_sg_id]
+  security_groups = [var.vpn_sg_name]
 
   # Mạng ra Internet
   network {
     uuid = var.network_id
   }
 
-  # Mạng private kết nối với app_node (Sử dụng Port có cấu hình allowed_address_pairs)
+  # Transit network to WAF. VPN Gateway no longer connects directly to app/db net.
   network {
-    port = openstack_networking_port_v2.vpn_app_port.id
+    port = openstack_networking_port_v2.vpn_waf_port.id
   }
 
   user_data = <<-EOF
@@ -82,6 +171,7 @@ resource "openstack_compute_instance_v2" "vpn_gateway" {
               
               echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
               sysctl -p
+              ip route add ${var.app_subnet_cidr} via ${var.waf_transit_ip} || true
               DEFAULT_IFACE=$(ip route show default | awk '{print $5; exit}')
               iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
               netfilter-persistent save

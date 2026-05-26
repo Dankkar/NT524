@@ -80,6 +80,12 @@ variable "waf_node_name" {
   default     = "aws-waf-node"
 }
 
+variable "app_node_name" {
+  type        = string
+  description = "Name tag for the AWS app node"
+  default     = "aws-app-node"
+}
+
 variable "github_repository" {
   type        = string
   description = "GitHub repository path (e.g. your-username/your-repo-name) allowed to assume the ECR push role"

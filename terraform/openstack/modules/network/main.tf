@@ -17,6 +17,21 @@ resource "openstack_networking_subnet_v2" "private_subnet" {
   ip_version = 4
 }
 
+# Transit network between VPN Gateway and WAF. It is not attached to the
+# OpenStack router; traffic must be routed by the VPN and WAF VMs.
+resource "openstack_networking_network_v2" "waf_private_net" {
+  name           = var.waf_net_name
+  admin_state_up = "true"
+}
+
+resource "openstack_networking_subnet_v2" "waf_private_subnet" {
+  name       = var.waf_subnet_name
+  network_id = openstack_networking_network_v2.waf_private_net.id
+  cidr       = var.waf_subnet_cidr
+  ip_version = 4
+  no_gateway = true
+}
+
 # Mạng private riêng biệt cho App Node (Không nối ra Router)
 resource "openstack_networking_network_v2" "app_private_net" {
   name           = var.app_net_name

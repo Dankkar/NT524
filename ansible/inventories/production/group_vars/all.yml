@@ -1,7 +1,7 @@
 ---
 aws_vpc_cidr: 172.31.0.0/16
 openstack_app_cidr: 10.0.1.0/24
-openstack_vpn_app_ip: 10.0.1.254
+openstack_vpn_app_ip: 10.0.2.254
 wireguard_cidr: 10.200.0.0/24
 
 wireguard_interface: wg0
@@ -18,17 +18,35 @@ wireguard_openstack_app_nat_source_cidrs:
   - "{{ aws_vpc_cidr }}"
   - "{{ wireguard_cidr }}"
 
-app_backend_host: 10.0.1.237
+app_backend_host: 10.0.1.244
 app_backend_port: 80
-juice_shop_image: bkimminich/juice-shop
-juice_shop_container_name: juiceshop
-juice_shop_host_port: 80
-juice_shop_container_port: 3000
+
+hybrid_app_image: hybrid-auth-app:local
+hybrid_app_container_name: hybrid-auth-app
+hybrid_app_host_port: 80
+hybrid_app_container_port: 8000
+hybrid_app_base_dir: /opt/hybrid-auth-app
+hybrid_app_session_secret: change-this-lab-secret
+hybrid_app_dev_login_enabled: true
+hybrid_app_trust_proxy_headers: true
+
+postgres_image: postgres:16-alpine
+postgres_container_name: hybrid-auth-postgres
+postgres_host: 10.0.1.94
+postgres_port: 5432
+postgres_database: hybrid_auth
+postgres_username: hybrid_auth
+postgres_password: hybrid_auth_lab_password
+postgres_data_dir: /opt/hybrid-auth/postgres/data
+hybrid_app_database_url: "postgresql://{{ postgres_username }}:{{ postgres_password }}@{{ postgres_host }}:{{ postgres_port }}/{{ postgres_database }}"
 
 nginx_server_name: _
 nginx_access_log: /var/log/nginx/access.log
 nginx_error_log: /var/log/nginx/error.log
-waf_image: "742873383494.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest"
+waf_image: "211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest"
+waf_ecr_region: ap-southeast-1
+waf_ecr_login_enabled: true
+waf_ecr_login_from_controller: true
 
 elastic_stack_major_version: "8.x"
 logstash_host: "{{ openstack_vpn_app_ip }}"

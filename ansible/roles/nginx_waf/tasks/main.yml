@@ -54,43 +54,18 @@
 
 # --- INSTALL DOCKER AND DOCKER COMPOSE ---
 
-- name: Install Docker GPG key and dependencies
+- name: Install Docker and dependencies from Ubuntu repository
   ansible.builtin.apt:
     name:
       - ca-certificates
       - curl
-      - gnupg
       - git
+      - docker.io
     state: present
     update_cache: true
-
-- name: Create Docker keyrings directory
-  ansible.builtin.file:
-    path: /etc/apt/keyrings
-    state: directory
-    mode: "0755"
-
-- name: Download Docker GPG key
-  ansible.builtin.apt_key:
-    url: https://download.docker.com/linux/ubuntu/gpg
-    state: present
-    keyring: /etc/apt/keyrings/docker.gpg
-
-- name: Add Docker repository
-  ansible.builtin.apt_repository:
-    repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
-    state: present
-
-- name: Install Docker CE and Docker Compose plugin
-  ansible.builtin.apt:
-    name:
-      - docker-ce
-      - docker-ce-cli
-      - containerd.io
-      - docker-buildx-plugin
-      - docker-compose-plugin
-    state: present
-    update_cache: true
+    lock_timeout: 600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
 
 - name: Ensure Docker service is running
   ansible.builtin.systemd:
@@ -130,18 +105,10 @@
     mode: "0644"
   notify: Reload Nginx
 
-- name: Copy docker-compose.yml template to WAF host
+- name: Copy app proxy virtual host config to WAF host
   ansible.builtin.template:
-    src: docker-compose.yml.j2
-    dest: /opt/waf-nginx/docker-compose.yml
-    owner: root
-    group: root
-    mode: "0644"
-
-- name: Copy Juice Shop proxy virtual host config to WAF host
-  ansible.builtin.template:
-    src: juice_shop_proxy.conf.j2
-    dest: /opt/waf-nginx/juice_shop_proxy.conf
+    src: app_proxy.conf.j2
+    dest: /opt/waf-nginx/app_proxy.conf
     owner: root
     group: root
     mode: "0644"
@@ -229,21 +196,54 @@
     name: awscli
     state: present
     update_cache: true
+  when: waf_ecr_login_enabled | default(true) and not (waf_ecr_login_from_controller | default(false))
 
-- name: Authenticate Docker with AWS ECR
+- name: Authenticate Docker with AWS ECR from WAF host
   ansible.builtin.shell: |
-    aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin {{ waf_image.split('/')[0] }}
+    aws ecr get-login-password --region {{ waf_ecr_region | default('ap-southeast-1') }} | docker login --username AWS --password-stdin {{ waf_image.split('/')[0] }}
   changed_when: false
+  no_log: true
+  when: waf_ecr_login_enabled | default(true) and not (waf_ecr_login_from_controller | default(false))
+
+- name: Get ECR login password on Ansible controller
+  ansible.builtin.command: "aws ecr get-login-password --region {{ waf_ecr_region | default('ap-southeast-1') }}"
+  delegate_to: localhost
+  become: false
+  register: waf_ecr_controller_password
+  changed_when: false
+  no_log: true
+  when: waf_ecr_login_enabled | default(true) and waf_ecr_login_from_controller | default(false)
+
+- name: Authenticate Docker with AWS ECR using controller token
+  ansible.builtin.command:
+    cmd: "docker login --username AWS --password-stdin {{ waf_image.split('/')[0] }}"
+    stdin: "{{ waf_ecr_controller_password.stdout }}"
+  changed_when: false
+  no_log: true
+  when: waf_ecr_login_enabled | default(true) and waf_ecr_login_from_controller | default(false)
 
 - name: Pull WAF image from ECR
-  ansible.builtin.command:
-    cmd: docker compose pull
-    chdir: /opt/waf-nginx
-  changed_when: false
+  ansible.builtin.command: "docker pull {{ waf_image }}"
+  register: waf_pull
+  changed_when: "'Downloaded newer image' in waf_pull.stdout or 'Pull complete' in waf_pull.stdout"
 
-- name: Run WAF Nginx Container using Docker Compose
-  ansible.builtin.command:
-    cmd: docker compose up -d
-    chdir: /opt/waf-nginx
-  register: compose_output
-  changed_when: "'Started' in compose_output.stdout or 'Recreated' in compose_output.stdout"
+- name: Remove existing WAF Nginx container
+  ansible.builtin.command: docker rm -f waf-nginx
+  register: waf_remove
+  changed_when: waf_remove.rc == 0
+  failed_when: waf_remove.rc not in [0, 1]
+
+- name: Run WAF Nginx container
+  ansible.builtin.command: >-
+    docker run -d
+    --name waf-nginx
+    --restart always
+    --network host
+    -v /opt/waf-nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    -v /opt/waf-nginx/app_proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    -v /opt/waf-nginx/modsec/main.conf:/etc/nginx/modsec/main.conf:ro
+    -v /opt/waf-nginx/modsec/modsecurity.conf:/etc/nginx/modsec/modsecurity.conf:ro
+    -v /opt/waf-nginx/modsec/unicode.mapping:/etc/nginx/modsec/unicode.mapping:ro
+    -v /opt/waf-nginx/modsec/crs-setup.conf:/etc/nginx/modsec/crs-setup.conf:ro
+    -v /opt/waf-nginx/modsec/rules:/etc/nginx/modsec/rules
+    {{ waf_image }}

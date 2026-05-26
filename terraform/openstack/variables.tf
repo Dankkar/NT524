@@ -39,6 +39,12 @@ variable "app_node_name" {
   default     = "app-node"
 }
 
+variable "waf_node_name" {
+  description = "Name of the WAF Node instance"
+  type        = string
+  default     = "waf-node"
+}
+
 variable "vpn_node_name" {
   description = "Name of the VPN Gateway instance"
   type        = string
@@ -63,6 +69,24 @@ variable "private_subnet_cidr" {
   default     = "10.0.0.0/24"
 }
 
+variable "waf_net_name" {
+  description = "Name of the transit network between VPN Gateway and WAF Node"
+  type        = string
+  default     = "waf_private_net"
+}
+
+variable "waf_subnet_name" {
+  description = "Name of the transit subnet between VPN Gateway and WAF Node"
+  type        = string
+  default     = "waf_private_subnet"
+}
+
+variable "waf_subnet_cidr" {
+  description = "CIDR block for the transit network between VPN Gateway and WAF Node"
+  type        = string
+  default     = "10.0.2.0/24"
+}
+
 variable "app_net_name" {
   description = "Name of the isolated private network for App Node"
   type        = string
@@ -82,9 +106,33 @@ variable "app_subnet_cidr" {
 }
 
 variable "vpn_app_ip" {
-  description = "Fixed IP address for the VPN Gateway port in the App network"
+  description = "Fixed IP address for the WAF Node port in the App network"
   type        = string
   default     = "10.0.1.254"
+}
+
+variable "vpn_waf_ip" {
+  description = "Fixed IP address for the VPN Gateway port in the WAF transit network"
+  type        = string
+  default     = "10.0.2.254"
+}
+
+variable "waf_transit_ip" {
+  description = "Fixed IP address for the WAF Node port in the WAF transit network"
+  type        = string
+  default     = "10.0.2.10"
+}
+
+variable "db_node_name" {
+  description = "Name of the centralized Database Node instance"
+  type        = string
+  default     = "db-node"
+}
+
+variable "db_allowed_cidrs" {
+  description = "CIDR ranges allowed to reach PostgreSQL on the centralized DB node"
+  type        = list(string)
+  default     = ["10.0.1.0/24", "10.0.2.0/24", "172.31.0.0/16", "10.200.0.0/24"]
 }
 
 variable "router_name" {

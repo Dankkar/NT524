@@ -8,6 +8,5 @@
 
 - name: Restart Nginx
   ansible.builtin.command:
-    cmd: docker compose restart
-    chdir: /opt/waf-nginx
+    cmd: docker restart waf-nginx
   ignore_errors: true

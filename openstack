@@ -1,6 +1,6 @@
-
 source ~/kolla-venv/bin/activate
-cd /etc/kolla/ansible/inventory/
 source /etc/kolla/admin-openrc.sh
+cd /etc/kolla/ansible/inventory/
 
-source ~/modsec-ai-venv/bin/activate
+# Activate this separately only when running ModSecurity ML tooling:
+# source ~/modsec-ai-venv/bin/activate

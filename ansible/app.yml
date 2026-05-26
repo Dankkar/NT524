@@ -1,5 +1,12 @@
 ---
-- name: Deploy Juice Shop app node
+- name: Deploy centralized PostgreSQL DB node
+  hosts: db_nodes
+  become: true
+  gather_facts: true
+  roles:
+    - postgresql_centralized
+
+- name: Deploy lightweight auth app node
   hosts: app_nodes
   become: true
   gather_facts: true
@@ -7,5 +14,5 @@
     filebeat_node_role: app
     filebeat_inputs: "{{ filebeat_app_inputs }}"
   roles:
-    - juice_shop_app
+    - simple_auth_app
     - filebeat_agent

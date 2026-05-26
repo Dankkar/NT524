@@ -100,9 +100,9 @@ filter {
     mutate { add_field => { "log_source_index" => "siem-waf-access" } }
   }
 
-  # ─── App node: Juice Shop container log ─────────────────────────────────────
+  # ─── App node: lightweight auth app container log ───────────────────────────
   else if [fields][node_role] == "app" and [fields][log_type] == "docker_container" {
-    # Juice Shop uses Morgan / custom logger which emits plain text or JSON
+    # The app may emit plain text or structured JSON depending on the route.
     json {
       source  => "message"
       target  => "app"

@@ -10,6 +10,10 @@ variable "vpn_sg_id" {
   type = string
 }
 
+variable "app_sg_id" {
+  type = string
+}
+
 variable "public_key_path" {
   type = string
 }
@@ -27,6 +31,10 @@ variable "vpn_node_name" {
 }
 
 variable "waf_node_name" {
+  type = string
+}
+
+variable "app_node_name" {
   type = string
 }
 

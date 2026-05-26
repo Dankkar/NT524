@@ -74,6 +74,28 @@ resource "aws_instance" "waf_node" {
   depends_on = [aws_instance.vpn_gateway]
 }
 
+resource "aws_instance" "app_node" {
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = var.instance_type
+  subnet_id                   = var.subnet_id
+  key_name                    = aws_key_pair.vpn_key.key_name
+  associate_public_ip_address = true
+
+  vpc_security_group_ids = [var.app_sg_id]
+
+  user_data = <<-EOF
+              #!/bin/bash
+              echo "net.ipv4.ip_forward=0" >> /etc/sysctl.conf
+              sysctl -p || true
+              EOF
+
+  tags = {
+    Name = var.app_node_name
+  }
+
+  depends_on = [aws_instance.vpn_gateway, aws_instance.waf_node]
+}
+
 resource "aws_eip" "waf_eip" {
   domain   = "vpc"
   instance = aws_instance.waf_node.id

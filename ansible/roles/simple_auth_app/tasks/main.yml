@@ -1,0 +1,119 @@
+---
+- name: Wait for cloud-init to finish
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'if command -v cloud-init >/dev/null 2>&1; then
+    cloud-init status --wait || cloud-init status | grep -q "status: error";
+    fi'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Wait for apt/dpkg locks
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'while command -v fuser >/dev/null 2>&1 &&
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+    /var/cache/apt/archives/lock /var/lib/apt/lists/lock >/dev/null 2>&1;
+    do sleep 5; done'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Force apt to use IPv4
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/99force-ipv4
+    content: 'Acquire::ForceIPv4 "true";'
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install Docker for app
+  ansible.builtin.apt:
+    name:
+      - docker.io
+    state: present
+    update_cache: true
+    lock_timeout: 600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Ensure Docker is running
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Create app source directory
+  ansible.builtin.file:
+    path: "{{ hybrid_app_base_dir }}/source"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy lightweight app source
+  ansible.builtin.copy:
+    src: simple-auth-app/
+    dest: "{{ hybrid_app_base_dir }}/source/"
+    owner: root
+    group: root
+    mode: "0644"
+  register: hybrid_app_source
+
+- name: Stop legacy NodeGoat container if present
+  ansible.builtin.command: docker rm -f nodegoat
+  register: remove_nodegoat
+  changed_when: remove_nodegoat.rc == 0
+  failed_when: remove_nodegoat.rc not in [0, 1]
+
+- name: Stop legacy local MongoDB container if present
+  ansible.builtin.command: docker rm -f nodegoat-mongo
+  register: remove_nodegoat_mongo
+  changed_when: remove_nodegoat_mongo.rc == 0
+  failed_when: remove_nodegoat_mongo.rc not in [0, 1]
+
+- name: Build lightweight auth app image
+  ansible.builtin.command: "docker build -t {{ hybrid_app_image }} {{ hybrid_app_base_dir }}/source"
+  register: hybrid_app_build
+  changed_when: hybrid_app_source.changed or 'Successfully built' in hybrid_app_build.stdout or 'writing image' in hybrid_app_build.stderr
+
+- name: Inspect lightweight auth app container
+  ansible.builtin.command: "docker inspect {{ hybrid_app_container_name }}"
+  register: hybrid_app_inspect
+  changed_when: false
+  failed_when: hybrid_app_inspect.rc not in [0, 1]
+
+- name: Recreate app container when image or settings changed
+  ansible.builtin.command: "docker rm -f {{ hybrid_app_container_name }}"
+  register: hybrid_app_remove
+  changed_when: hybrid_app_remove.rc == 0
+  failed_when: hybrid_app_remove.rc not in [0, 1]
+  when: hybrid_app_inspect.rc == 0 and hybrid_app_build.changed
+
+- name: Refresh lightweight auth app inspect result
+  ansible.builtin.command: "docker inspect {{ hybrid_app_container_name }}"
+  register: hybrid_app_inspect_after_refresh
+  changed_when: false
+  failed_when: hybrid_app_inspect_after_refresh.rc not in [0, 1]
+
+- name: Start lightweight auth app container
+  ansible.builtin.command: >-
+    docker run -d
+    --name {{ hybrid_app_container_name }}
+    --restart unless-stopped
+    -p {{ hybrid_app_host_port }}:{{ hybrid_app_container_port }}
+    -e DATABASE_URL={{ hybrid_app_database_url }}
+    -e APP_SESSION_SECRET={{ hybrid_app_session_secret }}
+    -e APP_DEV_LOGIN_ENABLED={{ hybrid_app_dev_login_enabled | lower }}
+    -e APP_TRUST_PROXY_HEADERS={{ hybrid_app_trust_proxy_headers | lower }}
+    {{ hybrid_app_image }}
+  register: hybrid_app_run
+  no_log: true
+  when: hybrid_app_inspect_after_refresh.rc != 0
+
+- name: Ensure lightweight auth app container is running
+  ansible.builtin.command: "docker start {{ hybrid_app_container_name }}"
+  register: hybrid_app_start
+  changed_when: "'{{ hybrid_app_container_name }}' in hybrid_app_start.stdout"
+  when: hybrid_app_inspect_after_refresh.rc == 0

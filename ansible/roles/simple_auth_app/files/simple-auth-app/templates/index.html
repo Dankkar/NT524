@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="topbar">
+  <div>
+    <h1>Hybrid Auth App</h1>
+    <p>{{ user.display_name }} · {{ user.email }}</p>
+  </div>
+  <form method="post" action="{{ url_for('logout') }}">
+    <button class="secondary" type="submit">Sign out</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Account Data</h2>
+  <dl class="meta">
+    <div><dt>User ID</dt><dd>{{ user.id }}</dd></div>
+    <div><dt>Provider Subject</dt><dd>{{ user.provider_subject or "header-auth" }}</dd></div>
+    <div><dt>Created</dt><dd>{{ user.created_at }}</dd></div>
+  </dl>
+</section>
+
+<section class="panel">
+  <h2>Private Notes</h2>
+  <form method="post" action="{{ url_for('create_note') }}" class="note-form">
+    <input name="body" maxlength="500" placeholder="Write a short note" required>
+    <button type="submit">Save</button>
+  </form>
+  <ul class="notes">
+    {% for body, created_at in notes %}
+    <li><span>{{ body }}</span><time>{{ created_at }}</time></li>
+    {% else %}
+    <li class="empty">No notes yet.</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

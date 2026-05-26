@@ -18,6 +18,18 @@ variable "private_subnet_cidr" {
   type = string
 }
 
+variable "waf_net_name" {
+  type = string
+}
+
+variable "waf_subnet_name" {
+  type = string
+}
+
+variable "waf_subnet_cidr" {
+  type = string
+}
+
 variable "app_net_name" {
   type = string
 }

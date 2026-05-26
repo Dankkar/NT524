@@ -1,0 +1,95 @@
+---
+- name: Wait for cloud-init to finish
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'if command -v cloud-init >/dev/null 2>&1; then
+    cloud-init status --wait || cloud-init status | grep -q "status: error";
+    fi'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Wait for apt/dpkg locks
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'while command -v fuser >/dev/null 2>&1 &&
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+    /var/cache/apt/archives/lock /var/lib/apt/lists/lock >/dev/null 2>&1;
+    do sleep 5; done'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Force apt to use IPv4
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/99force-ipv4
+    content: 'Acquire::ForceIPv4 "true";'
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install Docker for PostgreSQL
+  ansible.builtin.apt:
+    name:
+      - docker.io
+    state: present
+    update_cache: true
+    lock_timeout: 600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Ensure Docker is running
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Create PostgreSQL data directory
+  ansible.builtin.file:
+    path: "{{ postgres_data_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Pull PostgreSQL image
+  ansible.builtin.command: "docker pull {{ postgres_image }}"
+  register: postgres_pull
+  changed_when: "'Downloaded newer image' in postgres_pull.stdout or 'Pull complete' in postgres_pull.stdout"
+
+- name: Inspect PostgreSQL container
+  ansible.builtin.command: "docker inspect {{ postgres_container_name }}"
+  register: postgres_inspect
+  changed_when: false
+  failed_when: postgres_inspect.rc not in [0, 1]
+
+- name: Start PostgreSQL container
+  ansible.builtin.command: >-
+    docker run -d
+    --name {{ postgres_container_name }}
+    --restart unless-stopped
+    -p {{ postgres_port }}:5432
+    -v {{ postgres_data_dir }}:/var/lib/postgresql/data
+    -e POSTGRES_DB={{ postgres_database }}
+    -e POSTGRES_USER={{ postgres_username }}
+    -e POSTGRES_PASSWORD={{ postgres_password }}
+    {{ postgres_image }}
+  register: postgres_run
+  no_log: true
+  when: postgres_inspect.rc != 0
+
+- name: Ensure PostgreSQL container is running
+  ansible.builtin.command: "docker start {{ postgres_container_name }}"
+  register: postgres_start
+  changed_when: "'{{ postgres_container_name }}' in postgres_start.stdout"
+  when: postgres_inspect.rc == 0
+
+- name: Wait for PostgreSQL to accept connections
+  ansible.builtin.command: >-
+    docker exec {{ postgres_container_name }}
+    pg_isready -U {{ postgres_username }} -d {{ postgres_database }}
+  register: postgres_ready
+  retries: 30
+  delay: 2
+  until: postgres_ready.rc == 0
+  changed_when: false

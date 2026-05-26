@@ -10,6 +10,14 @@ output "waf_private_ip" {
   value = module.compute.waf_private_ip
 }
 
+output "app_public_ip" {
+  value = module.compute.app_public_ip
+}
+
+output "app_private_ip" {
+  value = module.compute.app_private_ip
+}
+
 output "vpn_private_ip" {
   value = module.compute.vpn_private_ip
 }
