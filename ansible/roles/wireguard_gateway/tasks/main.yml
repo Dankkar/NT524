@@ -156,6 +156,50 @@
     - inventory_hostname in groups.openstack_vpn
     - wireguard_openstack_app_nat | bool
 
+- name: Route OpenStack app subnet through WAF
+  ansible.builtin.command: >-
+    ip route replace {{ openstack_app_cidr }}
+    via {{ openstack_waf_transit_ip }}
+    dev {{ openstack_app_interface }}
+  changed_when: false
+  when:
+    - inventory_hostname in groups.openstack_vpn
+    - wireguard_openstack_app_nat | bool
+
+- name: Persist OpenStack app route through WAF
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/openstack-app-route.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Route OpenStack app subnet through WAF
+      After=network-online.target wg-quick@{{ wireguard_interface }}.service
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/sbin/ip route replace {{ openstack_app_cidr }} via {{ openstack_waf_transit_ip }} dev {{ openstack_app_interface }}
+
+      [Install]
+      WantedBy=multi-user.target
+  register: openstack_app_route_unit
+  when:
+    - inventory_hostname in groups.openstack_vpn
+    - wireguard_openstack_app_nat | bool
+
+- name: Enable OpenStack app route service
+  ansible.builtin.systemd:
+    name: openstack-app-route.service
+    enabled: true
+    state: started
+    daemon_reload: "{{ openstack_app_route_unit.changed }}"
+  when:
+    - inventory_hostname in groups.openstack_vpn
+    - wireguard_openstack_app_nat | bool
+
 - name: Check OpenStack app NAT rules
   ansible.builtin.command: >-
     iptables -t nat -C POSTROUTING
@@ -192,3 +236,13 @@
     name: "wg-quick@{{ wireguard_interface }}"
     enabled: true
     state: started
+
+- name: Re-apply OpenStack app subnet route after WireGuard starts
+  ansible.builtin.command: >-
+    ip route replace {{ openstack_app_cidr }}
+    via {{ openstack_waf_transit_ip }}
+    dev {{ openstack_app_interface }}
+  changed_when: false
+  when:
+    - inventory_hostname in groups.openstack_vpn
+    - wireguard_openstack_app_nat | bool

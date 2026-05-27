@@ -1,0 +1,7 @@
+---
+- name: Deploy public gateway reverse proxy
+  hosts: gateway_nodes
+  become: true
+  gather_facts: true
+  roles:
+    - gateway_proxy

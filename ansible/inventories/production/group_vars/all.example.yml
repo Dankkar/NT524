@@ -2,6 +2,8 @@
 aws_vpc_cidr: 172.31.0.0/16
 openstack_app_cidr: 10.0.1.0/24
 openstack_vpn_app_ip: 10.0.2.254
+openstack_waf_transit_cidr: 10.0.2.0/24
+openstack_waf_transit_ip: CHANGE_ME_OPENSTACK_WAF_TRANSIT_IP
 wireguard_cidr: 10.200.0.0/24
 
 wireguard_interface: wg0
@@ -18,6 +20,12 @@ wireguard_openstack_app_nat_source_cidrs:
   - "{{ aws_vpc_cidr }}"
   - "{{ wireguard_cidr }}"
 
+openstack_waf_app_nat: true
+openstack_waf_app_nat_source_cidrs:
+  - "{{ openstack_waf_transit_cidr }}"
+  - "{{ aws_vpc_cidr }}"
+  - "{{ wireguard_cidr }}"
+
 app_backend_host: CHANGE_ME_OPENSTACK_APP_PRIVATE_IP
 app_backend_port: 80
 
@@ -29,6 +37,22 @@ hybrid_app_base_dir: /opt/hybrid-auth-app
 hybrid_app_session_secret: CHANGE_ME_RANDOM_SECRET
 hybrid_app_dev_login_enabled: true
 hybrid_app_trust_proxy_headers: true
+
+gateway_server_name: app.example.com
+gateway_auth_enabled: true
+gateway_tls_enabled: true
+gateway_tls_self_signed: true
+gateway_public_scheme: https
+gateway_public_host: app.example.com
+oauth2_proxy_enabled: true
+oauth2_proxy_version: v7.15.2
+oauth2_proxy_cookie_secret: CHANGE_ME_16_24_OR_32_CHAR_SECRET
+oauth2_proxy_client_id: CHANGE_ME_COGNITO_CLIENT_ID
+oauth2_proxy_client_secret: CHANGE_ME_COGNITO_CLIENT_SECRET
+oauth2_proxy_oidc_issuer_url: CHANGE_ME_COGNITO_ISSUER_URL
+oauth2_proxy_cookie_domain: ".example.com"
+oauth2_proxy_email_domains:
+  - "*"
 
 postgres_image: postgres:16-alpine
 postgres_container_name: hybrid-auth-postgres

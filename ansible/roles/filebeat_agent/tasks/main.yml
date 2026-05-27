@@ -18,6 +18,12 @@
     group: root
     mode: "0644"
 
+- name: Check Filebeat CLI
+  ansible.builtin.command: filebeat version
+  register: filebeat_cli_check
+  changed_when: false
+  failed_when: false
+
 - name: Install Filebeat repository dependencies
   ansible.builtin.apt:
     name:
@@ -28,6 +34,12 @@
     lock_timeout: 600
   environment:
     DEBIAN_FRONTEND: noninteractive
+  when: filebeat_cli_check.rc != 0
+
+- name: Check Elastic package signing key
+  ansible.builtin.stat:
+    path: /usr/share/keyrings/elasticsearch-keyring.asc
+  register: elastic_keyring_stat
 
 - name: Install Elastic package signing key
   ansible.builtin.get_url:
@@ -36,6 +48,9 @@
     owner: root
     group: root
     mode: "0644"
+  when:
+    - filebeat_cli_check.rc != 0
+    - not elastic_keyring_stat.stat.exists
 
 - name: Configure Elastic APT repository
   ansible.builtin.apt_repository:
@@ -43,6 +58,7 @@
     filename: "elastic-{{ elastic_stack_major_version }}"
     state: present
     update_cache: true
+  when: filebeat_cli_check.rc != 0
 
 - name: Install Filebeat
   ansible.builtin.apt:
@@ -51,6 +67,7 @@
     lock_timeout: 600
   environment:
     DEBIAN_FRONTEND: noninteractive
+  when: filebeat_cli_check.rc != 0
 
 - name: Configure Filebeat
   ansible.builtin.template:

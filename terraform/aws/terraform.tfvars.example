@@ -24,3 +24,17 @@ openstack_vpn_public_cidr = "CHANGE_ME_PUBLIC_WAN_IP/32"
 
 # Public key imported to AWS as the EC2 key pair named aws_vpn_key.
 public_key_path = "~/.ssh/aws_vpn_key.pub"
+
+# Optional lab Route 53 failover DNS.
+route53_failover_enabled      = false
+route53_create_hosted_zone    = true
+route53_zone_name             = "hybrid-lab.test"
+route53_record_name           = "app"
+route53_secondary_gateway_ip  = "CHANGE_ME_OPENSTACK_GATEWAY_IP"
+route53_health_check_path     = "/healthz"
+
+# Optional Cognito Hosted UI for oauth2-proxy on the cloud gateways.
+cognito_enabled          = true
+cognito_user_pool_name   = "hybrid-auth-users"
+cognito_app_client_name  = "hybrid-auth-gateway"
+cognito_domain_prefix    = "CHANGE_ME_UNIQUE_COGNITO_DOMAIN_PREFIX"

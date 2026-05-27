@@ -1,0 +1,103 @@
+{% set auth_enabled = gateway_auth_enabled | default(false) | bool %}
+{% set tls_enabled = gateway_tls_enabled | default(false) | bool %}
+{% set public_host = gateway_public_host | default(gateway_server_name | default('_')) %}
+server {
+    listen 80 default_server;
+    server_name {{ gateway_server_name | default('_') }};
+    large_client_header_buffers 4 32k;
+
+    access_log /var/log/nginx/gateway_access.log;
+    error_log /var/log/nginx/gateway_error.log;
+
+    location /healthz {
+        proxy_pass http://{{ gateway_upstream_host }}:{{ gateway_upstream_port | default(80) }}/healthz;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+{% if tls_enabled %}
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name {{ gateway_server_name | default('_') }};
+    large_client_header_buffers 4 32k;
+
+    ssl_certificate {{ gateway_tls_cert_path | default('/etc/nginx/ssl/' ~ public_host ~ '.crt') }};
+    ssl_certificate_key {{ gateway_tls_key_path | default('/etc/nginx/ssl/' ~ public_host ~ '.key') }};
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    access_log /var/log/nginx/gateway_access.log;
+    error_log /var/log/nginx/gateway_error.log;
+
+    location /healthz {
+        proxy_pass http://{{ gateway_upstream_host }}:{{ gateway_upstream_port | default(80) }}/healthz;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+{% endif %}
+
+{% if auth_enabled %}
+    location /oauth2/ {
+        proxy_pass http://127.0.0.1:4180;
+        proxy_http_version 1.1;
+        proxy_buffer_size 32k;
+        proxy_buffers 8 32k;
+        proxy_busy_buffers_size 64k;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Auth-Request-Redirect $scheme://$host$request_uri;
+    }
+
+    location = /oauth2/auth {
+        proxy_pass http://127.0.0.1:4180;
+        proxy_http_version 1.1;
+        proxy_buffer_size 32k;
+        proxy_buffers 8 32k;
+        proxy_busy_buffers_size 64k;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header Content-Length "";
+        proxy_pass_request_body off;
+    }
+{% endif %}
+
+    location / {
+{% if auth_enabled %}
+        auth_request /oauth2/auth;
+        error_page 401 = /oauth2/start?rd=$scheme://$host$request_uri;
+        auth_request_set $auth_user $upstream_http_x_auth_request_user;
+        auth_request_set $auth_email $upstream_http_x_auth_request_email;
+        auth_request_set $auth_preferred_username $upstream_http_x_auth_request_preferred_username;
+{% endif %}
+        proxy_pass http://{{ gateway_upstream_host }}:{{ gateway_upstream_port | default(80) }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+{% if auth_enabled %}
+        proxy_set_header X-Auth-Request-User $auth_user;
+        proxy_set_header X-Auth-Request-Email $auth_email;
+        proxy_set_header X-Auth-Request-Preferred-Username $auth_preferred_username;
+{% endif %}
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 120s;
+    }
+}

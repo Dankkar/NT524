@@ -1,0 +1,11 @@
+---
+- name: Reload gateway nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+
+- name: Restart oauth2-proxy
+  ansible.builtin.systemd:
+    name: oauth2-proxy
+    state: restarted
+    daemon_reload: true

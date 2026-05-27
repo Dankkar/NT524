@@ -86,8 +86,80 @@ variable "app_node_name" {
   default     = "aws-app-node"
 }
 
+variable "gateway_node_name" {
+  type        = string
+  description = "Name tag for the AWS public gateway node"
+  default     = "aws-gateway-node"
+}
+
 variable "github_repository" {
   type        = string
   description = "GitHub repository path (e.g. your-username/your-repo-name) allowed to assume the ECR push role"
   default     = "Dankkar/NT524"
+}
+
+variable "route53_failover_enabled" {
+  type        = bool
+  description = "Create Route 53 active/passive failover records for the public gateways."
+  default     = false
+}
+
+variable "route53_create_hosted_zone" {
+  type        = bool
+  description = "Create a lab public hosted zone. Set false when using an existing hosted zone ID."
+  default     = true
+}
+
+variable "route53_hosted_zone_id" {
+  type        = string
+  description = "Existing Route 53 hosted zone ID. Required when route53_create_hosted_zone is false."
+  default     = ""
+}
+
+variable "route53_zone_name" {
+  type        = string
+  description = "Route 53 zone name for failover DNS."
+  default     = "hybrid-lab.test"
+}
+
+variable "route53_record_name" {
+  type        = string
+  description = "Record name under route53_zone_name for the app entrypoint."
+  default     = "app"
+}
+
+variable "route53_secondary_gateway_ip" {
+  type        = string
+  description = "OpenStack gateway IP used as the Route 53 secondary failover target."
+  default     = "172.10.10.208"
+}
+
+variable "route53_health_check_path" {
+  type        = string
+  description = "HTTP path Route 53 checks on the AWS gateway primary target."
+  default     = "/healthz"
+}
+
+variable "cognito_enabled" {
+  type        = bool
+  description = "Create an Amazon Cognito user pool and hosted UI app client for gateway authentication."
+  default     = true
+}
+
+variable "cognito_user_pool_name" {
+  type        = string
+  description = "Name of the Cognito user pool used by the hybrid auth gateway."
+  default     = "hybrid-auth-users"
+}
+
+variable "cognito_app_client_name" {
+  type        = string
+  description = "Name of the Cognito app client used by oauth2-proxy."
+  default     = "hybrid-auth-gateway"
+}
+
+variable "cognito_domain_prefix" {
+  type        = string
+  description = "Globally unique Cognito hosted UI domain prefix in the selected AWS region."
+  default     = "nt524-hybrid-auth-211116632423"
 }

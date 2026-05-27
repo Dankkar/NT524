@@ -1,505 +1,357 @@
-# ĐỀ TÀI TÍCH HỢP ML VÀO HỆ THỐNG WAF GIÚP PHÁT HIỆN VÀ NGĂN NGỪA SLQ INJECTION VỚI OWASP CRS KẾT HỢP HỆ THỐNG SIEM
+# Hybrid Cloud NAC/WAF/App/DB Lab
 
-Tài liệu này mô tả chi tiết các thay đổi cấu trúc, kiến trúc triển khai Container hóa và quy trình CI/CD tự động hóa bảo mật thông qua GitHub Actions kết hợp Ansible cho hệ thống ModSecurity WAF của bạn.
+Ngay cap nhat: 2026-05-27
 
----
+Repo nay trien khai lab hybrid cloud gom AWS va OpenStack, co NAC bang Amazon Cognito, WAF ModSecurity/OWASP CRS o ca hai cloud, app Flask nhe, PostgreSQL centralized tren OpenStack, SIEM/ELK, va Route 53 DNS failover/failback.
 
-## 1. Kiến Trúc Tổng Quan Hệ Thống
+## Trang Thai Hien Tai
 
-Hệ thống hoạt động theo mô hình **Hybrid Cloud Security**:
-*   **AWS WAF Node:** Hoạt động như một Reverse Proxy tiếp nhận Traffic công cộng, tích hợp bộ nhân ModSecurity v3 và CRS v4 để lọc các Request độc hại.
-*   **WireGuard VPN Tunnel:** Kênh truyền mã hóa nối liền dải mạng AWS VPC (`172.31.0.0/16`) và OpenStack Private Subnet (`10.0.1.0/24`).
-*   **OpenStack App Node (`10.0.1.220`):** Máy chủ ứng dụng thực tế chạy Juice Shop được bảo vệ hoàn toàn phía sau WAF.
+Entrypoint public:
 
+```text
+https://app.nt524.io.vn/
 ```
-[Người dùng] 
-     │  (Traffic công cộng)
-     ▼
-[AWS WAF Node (Container Nginx + ModSecurity)]
-     │
-     ▼  (VPN Tunnel - WireGuard)
-[OpenStack App Node (Juice Shop: 10.0.1.220)]
+
+Hien tai browser se can accept warning TLS vi gateway dang dung self-signed certificate cho lab HTTPS.
+
+Da hoan thanh:
+
+- Route 53 failover DNS cho `app.nt524.io.vn`.
+- Amazon Cognito Hosted UI + `oauth2-proxy` + Nginx `auth_request` tren gateway.
+- AWS gateway va OpenStack gateway deu enforce login truoc khi vao WAF/app.
+- AWS WAF va OpenStack WAF dung Nginx + ModSecurity v3 + OWASP CRS.
+- AWS app va OpenStack app cung chay Lightweight Flask Auth App.
+- PostgreSQL centralized nam tren OpenStack DB node.
+- WireGuard site-to-site VPN giua AWS va OpenStack.
+- Test SQLi qua gateway/WAF tra HTTP `403`.
+- Test Route 53 failover/failback thanh cong sau khi them Cognito.
+
+Con can lam:
+
+- Thay self-signed gateway TLS cert bang Let's Encrypt/public TLS cert.
+- Giam rui ro public WAN IP OpenStack/laptop thay doi lam WireGuard SG chan tunnel.
+- Neu can, tach health endpoint gateway rieng thay vi proxy `/healthz` cua app.
+
+## Kien Truc
+
+```text
+Client
+  |
+  v
+app.nt524.io.vn
+Route 53 Failover DNS
+  | primary healthy             | primary failed
+  v                             v
+AWS Gateway                 OpenStack Gateway
+Nginx + oauth2-proxy        Nginx + oauth2-proxy
+  | Cognito login/session        | Cognito login/session
+  v                             v
+AWS WAF                     OpenStack WAF
+Nginx + ModSecurity CRS     Nginx + ModSecurity CRS
+  |                             |
+  v                             v
+AWS Flask App               OpenStack Flask App
+  \                           /
+   \                         /
+    v                       v
+   PostgreSQL centralized on OpenStack
 ```
----
 
-## 2. Triển khai hệ thống step-by-step
+Important traffic rules:
 
-### A. Chuẩn bị hệ thống Private Cloud (Openstack)
+- User hop le di qua `Gateway -> WAF -> App`.
+- App public HTTP tren AWS bi chan; user khong di truc tiep vao app.
+- AWS WAF khong con public EIP; chi nhan traffic tu AWS gateway/private network.
+- OpenStack public entrypoint hien dung `vpn-gateway` kiem gateway proxy.
+- `/healthz` tren gateway de public de Route 53 health check khong bi redirect login.
 
-Yêu cầu: Đã tự deploy được các core Service, tạo được Network, Instance,... Đối với trường hợp sử dụng Laptop 1 NIC để triển khai hệ thống Openstack-AIO thì Network của bạn cần trông tương tự như thế này:
-┌──────────────────────────────────────────────────────────────────────────┐
-│  Laptop (Ubuntu 24.04)                                                   │
-│                                                                          │
-│  wlp0s20f3 (WiFi DHCP) ◄── Management + Internet                         │
-│       │                                                                  │
-│       │  iptables MASQUERADE                                             │
-│       │                                                                  │
-│  br-exnat (172.10.10.1/24)   ◄── Linux Bridge, gateway cho external net  │
-│       │                                                                  │
-│  veth-ext ◄────────────► veth-peer                                       │
-│  (in br-exnat)            (in OVS br-ex)                                 │
-│                              │                                           │
-│                         OVN / Neutron                                    │
-│                              │                                           │
-│                    Provider Network 172.10.10.0/24                       │
-│                    Floating IPs: 172.10.10.200 – 172.10.10.250           │
-└──────────────────────────────────────────────────────────────────────────┘
+## Dia Chi Hien Tai
 
-1. Tạo trước External Network (Gateway 172.10.10.1 là IP của br-exnat bridge)
+DNS/domain:
+
+```text
+FQDN: app.nt524.io.vn
+Primary: AWS gateway 122.248.227.98
+Secondary: OpenStack gateway 172.10.10.208
+TTL: 30s
+Route 53 health check path: /healthz
+Route 53 health check ID: f8c7d0d4-b6fc-4311-b5bd-2c5fe44e3ed9
+```
+
+Route 53 nameservers cho `nt524.io.vn`:
+
+```text
+ns-1270.awsdns-30.org
+ns-2018.awsdns-60.co.uk
+ns-385.awsdns-48.com
+ns-916.awsdns-50.net
+```
+
+OpenStack:
+
+```text
+vpn_public_ip: 172.10.10.208
+waf_node_ip: 10.0.2.10
+app_node_ip: 10.0.1.244
+db_node_ip: 10.0.1.94
+waf transit CIDR: 10.0.2.0/24
+app/db CIDR: 10.0.1.0/24
+```
+
+AWS:
+
+```text
+gateway_public_ip: 122.248.227.98
+vpn_public_ip: 54.169.109.49
+waf_private_ip: 172.31.4.221
+app_private_ip: 172.31.8.161
+app_public_ip: 13.212.148.187
+ECR WAF image: 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest
+```
+
+Cognito:
+
+```text
+User Pool: hybrid-auth-users
+User Pool ID: ap-southeast-1_Xg1Q3ZUP9
+App Client: hybrid-auth-gateway
+App Client ID: 4gn2j0lo07rori6u3snjj6lr4p
+Hosted UI: https://nt524-hybrid-auth-211116632423.auth.ap-southeast-1.amazoncognito.com
+Callback URL: https://app.nt524.io.vn/oauth2/callback
+Logout URL: https://app.nt524.io.vn/
+```
+
+Demo user:
+
+```text
+Email: demo@nt524.io.vn
+Password: DemoPass123
+```
+
+## Repo Structure
+
+```text
+terraform/openstack/        OpenStack networks, gateway, WAF, app, DB nodes
+terraform/aws/              AWS EC2, SG, ECR, Route 53, Cognito
+ansible/gateway.yml         Deploy public gateways and oauth2-proxy
+ansible/network_vpn.yml     Deploy WireGuard/routing
+ansible/waf.yml             Deploy WAF on AWS/OpenStack
+ansible/app.yml             Deploy PostgreSQL and Flask app
+ansible/roles/gateway_proxy Nginx gateway + oauth2-proxy role
+ansible/roles/nginx_waf     Nginx/ModSecurity/CRS WAF role
+ansible/roles/simple_auth_app Flask app role
+ansible/roles/postgresql_centralized PostgreSQL role
+elk/                        Local ELK/SIEM stack
+docs/task.md                Detailed task log and latest operational notes
+docs/1.md                   Architecture/design plan
+```
+
+## Trien Khai Va Van Hanh
+
+### Terraform OpenStack
+
 ```bash
-openstack subnet create public-subnet \
-  --network public-net \
-  --subnet-range 172.10.10.0/24 \
-  --gateway 172.10.10.1 \
-  --allocation-pool start=172.10.10.200,end=172.10.10.250 \
-  --dns-nameserver 8.8.8.8 \
-  --no-dhcp
-```
-
-**Giải thích:**
-
-- 172.10.10.0/24: Dải mạng external sử dụng qua br-exnat bridge
-- gateway 172.10.10.1: IP của br-exnat = gateway cho VMs ra internet qua NAT
-- allocation-pool: Dải Floating IPs cho VMs (172.10.10.200 – 250)
-- Traffic đi: VM → OVN → br-ex → veth-peer → veth-ext → br-exnat → NAT → wlp0s20f3 → Internet
-
-2. Tạo SSH key nếu chưa có:
-```bash
-ssh-keygen -t rsa -b 4096 -f ~/.ssh/openstack_key -N ""
-```
-3. Tạo image Ubuntu:
-
-```bash
-# Download Ubuntu cloud image
-wget https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -O ubuntu-24.04.img
-
-# Upload image
-openstack image create "Ubuntu-24.04" \
-  --file ubuntu-24.04.img \
-  --disk-format qcow2 \
-  --container-format bare \
-  --public
-```
-4. Tạo flavor:
-```bash
-openstack flavor create m1.small \
-  --ram 2048 \
-  --disk 10 \
-  --vcpus 1
-```
-
-
-### B. Chuẩn bị hệ thống Public Cloud (AWS)
-
-1. Đã cấu hình AWS CLI tại local, nếu chưa thì xem tại:[Installing or updating to the latest version of the AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
-
-2. Chọn Region muốn triển khai ví dụ: ap-southeast-1 (Singapore)
-
-3. Chọn 1 VPC hoặc tạo mới. Lấy:
-    * ID VPC
-    * ID Subnet
-    * ID Route tables
-    * ID Network Connections
-
-### C. Tiến hành triển khai và cấu hình
-
-#### Terraform
-
-1. **Openstack**:
-
-```bash
-# Tìm External Network ID:
-source ~/kolla-venv/bin/activate
 source /etc/kolla/admin-openrc.sh
-openstack network list --external
-
-E.g:
-(kolla-venv) nhatnguyen@openstack-aio:/etc/kolla/ansible/inventory$ openstack network list --external
-+--------------------------------------+------------+--------------------------------------+
-| ID                                   | Name       | Subnets                              |
-+--------------------------------------+------------+--------------------------------------+
-| fe5863fe-28c1-4232-ae66-bfe39ceff5c9 | public-net | 7073f15f-66aa-4328-a3d5-eab1a7c33148 |
-+--------------------------------------+------------+--------------------------------------+
-
-=> Lấy ID: fe5863fe-28c1-4232-ae66-bfe39ceff5c9 và dán vào <OPENSTACK_EXTERNAL_NETWORK_ID> tại external_network_id của terraform/openstack/terraform.tfvars
-
-# Kiểm tra và triển khai hạ tầng
-cd terraform/openstack
-terraform init
-terraform plan
-terraform apply
-terraform output
-
-=> Ghi lại vpn_public_ip và app_node_ip
-E.g:
-Outputs:
-app_node_ip = "10.0.1.65"
-vpn_public_ip = "172.10.10.240"
+terraform -chdir=terraform/openstack init
+terraform -chdir=terraform/openstack plan
+terraform -chdir=terraform/openstack apply
+terraform -chdir=terraform/openstack output
 ```
 
-2. **AWS**:
+Neu recreate OpenStack, cap nhat lai IP trong:
+
+```text
+ansible/inventories/production/hosts.yml
+ansible/inventories/production/group_vars/all.yml
+terraform/aws/terraform.tfvars
+```
+
+### Terraform AWS
+
+Cap nhat `terraform/aws/terraform.tfvars`:
+
+```hcl
+aws_region = "ap-southeast-1"
+vpc_id = "vpc-..."
+subnet_id = "subnet-..."
+route_table_id = "rtb-..."
+openstack_vpn_public_cidr = "<WAN_PUBLIC_IP>/32"
+public_key_path = "~/.ssh/vpn_key.pub"
+
+route53_failover_enabled     = true
+route53_create_hosted_zone   = true
+route53_zone_name            = "nt524.io.vn"
+route53_record_name          = "app"
+route53_secondary_gateway_ip = "172.10.10.208"
+route53_health_check_path    = "/healthz"
+
+cognito_enabled         = true
+cognito_user_pool_name  = "hybrid-auth-users"
+cognito_app_client_name = "hybrid-auth-gateway"
+cognito_domain_prefix   = "nt524-hybrid-auth-211116632423"
+```
+
+Apply:
+
 ```bash
-# Kiểm tra IP public (IP mà Internet đang nhìn thấy Laptop của bạn đi ra ngoài)
-curl -fsS https://checkip.amazonaws.com
-=> Đây là biến openstack_vpn_public_cidr cho lệnh tiếp theo
-
-# Chỉ định hoặc tạo mới SSH Key cho AWS
-ssh-keygen -t rsa -b 4096 -f ~/.ssh/aws_vpn_key -N ""
-
-# Chỉnh sửa AWS variables
-cd terraform/aws
-cp terraform.tfvars.example terraform.tfvars
-
-=> Sửa terraform.tfvars: vpc_id, subnet_id, route_table_id, openstack_vpn_public_cidr, public_key_path
-
-# Kiểm tra và triển khai hạ tầng
-cd terraform/aws
-terraform init
-terraform plan
-terraform apply
-terraform output
-
-=> Ghi lại output
-Outputs:
-ecr_repository_url = "<AWS-ACCOUNT-ID>.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx"
-github_actions_role_arn = "arn:aws:iam::<AWS-ACCOUNT-ID>:role/github-actions-ecr-push-role"
-vpn_instance_id = "i-0a0bfe0527c2eb5f5"
-vpn_network_interface_id = "eni-057d589794009d1f4"
-vpn_private_ip = "172.31.42.199"
-vpn_public_ip = "18.139.214.17"
-waf_private_ip = "172.31.40.41"
-waf_public_ip = "47.131.193.254"
+terraform -chdir=terraform/aws init
+terraform -chdir=terraform/aws plan
+terraform -chdir=terraform/aws apply
+terraform -chdir=terraform/aws output
 ```
-#### ELK Local
+
+Sau khi tao Cognito, lay client secret cho `oauth2-proxy`:
+
+```bash
+terraform -chdir=terraform/aws output -raw cognito_user_pool_client_id
+terraform -chdir=terraform/aws output -raw cognito_user_pool_client_secret
+terraform -chdir=terraform/aws output -raw cognito_issuer_url
+```
+
+Cap nhat cac gia tri nay trong:
+
+```text
+ansible/inventories/production/group_vars/all.yml
+```
+
+### Build/Push WAF Image
+
+```bash
+aws ecr get-login-password --region ap-southeast-1 \
+  | docker login --username AWS --password-stdin 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com
+
+docker build --network=host \
+  -t 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest \
+  -f ansible/roles/nginx_waf/files/Dockerfile \
+  ansible/roles/nginx_waf/files/
+
+docker push 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest
+```
+
+### Ansible
+
+Dung virtualenv Ansible hien tai:
+
+```bash
+export ANSIBLE_LOCAL_TEMP=/tmp/ansible-local
+export ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp
+```
+
+Syntax-check:
+
+```bash
+/home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/network_vpn.yml --syntax-check
+/home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/waf.yml --syntax-check
+/home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/app.yml --syntax-check
+/home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/gateway.yml --syntax-check
+```
+
+Deploy theo thu tu:
+
+```bash
+/home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/network_vpn.yml
+/home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/app.yml
+/home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/waf.yml
+/home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/gateway.yml
+```
+
+## Kiem Tra Nhanh
+
+DNS:
+
+```bash
+dig +short @ns-1270.awsdns-30.org app.nt524.io.vn A
+dig +short app.nt524.io.vn A
+```
+
+Gateway health:
+
+```bash
+curl -fsS http://122.248.227.98/healthz
+curl -fsS http://172.10.10.208/healthz
+curl -k -fsS https://app.nt524.io.vn/healthz
+```
+
+Auth redirect:
+
+```bash
+curl -k -I https://app.nt524.io.vn/
+```
+
+Ket qua dung la `302` sang Cognito Hosted UI khi chua login.
+
+SQLi WAF test:
+
+```bash
+curl -k -o /dev/null -s -w "%{http_code}\n" \
+  "https://app.nt524.io.vn/?id=1%20OR%201=1"
+```
+
+Ket qua ky vong: `403`.
+
+Route 53 health check:
+
+```bash
+aws route53 get-health-check-status \
+  --health-check-id f8c7d0d4-b6fc-4311-b5bd-2c5fe44e3ed9 \
+  --query 'HealthCheckObservations[].StatusReport.Status' \
+  --output text
+```
+
+## Test Failover/Failback
+
+Failover:
+
+```bash
+/home/deployer/kolla-venv/bin/ansible -i ansible/inventories/production/hosts.yml \
+  aws-gateway -b -m systemd -a 'name=nginx state=stopped'
+
+dig +short @ns-1270.awsdns-30.org app.nt524.io.vn A
+curl -fsS http://172.10.10.208/healthz
+```
+
+Ket qua ky vong sau khi Route 53 health check fail:
+
+```text
+app.nt524.io.vn -> 172.10.10.208
+```
+
+Failback:
+
+```bash
+/home/deployer/kolla-venv/bin/ansible -i ansible/inventories/production/hosts.yml \
+  aws-gateway -b -m systemd -a 'name=nginx state=started enabled=true'
+
+dig +short @ns-1270.awsdns-30.org app.nt524.io.vn A
+curl -fsS http://122.248.227.98/healthz
+```
+
+Ket qua ky vong:
+
+```text
+app.nt524.io.vn -> 122.248.227.98
+```
+
+Lan test gan nhat ngay 2026-05-27 da thanh cong: DNS failover sang OpenStack, sau do failback ve AWS; Route 53 health check cuoi test `8/8 Success`.
+
+## ELK/SIEM
+
+Chay ELK local:
+
 ```bash
 cd elk
 sudo sysctl -w vm.max_map_count=262144
 sudo docker compose up -d --remove-orphans
-```
-### Build/push WAF image lên ECR trước khi chạy Ansible
-```bash
-cd /home/nhatnguyen/Desktop/NT524/NT524_2026/Project/SIEM
-
-# kiểm tra ECR repo có tồn tại chưa
-aws ecr describe-repositories --region ap-southeast-1 --repository-names my-waf-nginx
-
-# Build/push WAF image lên ECR trước khi chạy Ansible
-aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin <AWS-ACCOUNT-ID>.dkr.ecr.ap-southeast-1.amazonaws.com
-
-docker build --network=host \
-  -t <AWS-ACCOUNT-ID>.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest \
-  -f ansible/roles/nginx_waf/files/Dockerfile \
-  ansible/roles/nginx_waf/files/
-
-docker push <AWS-ACCOUNT-ID>.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest
-```
-
-#### Ansible
-```bash
-# Điền các IP cần thiết vào file hosts.yml
-cd ansible/inventories/production
-cp hosts.example.yml hosts.yml
-* aws-vpn.ansible_host = AWS vpn_public_ip
-* aws-waf.ansible_host = AWS waf_public_ip
-* openstack-vpn.ansible_host = OpenStack vpn_public_ip
-* openstack-app.ansible_host = OpenStack app_node_ip
-* ProxyCommand của openstack-app dùng OpenStack vpn_public_ip
-
-cp all.example.yml all.yml
-* app_backend_host = OpenStack app_node_ip
-* CHANGE_ME_AWS_ACCOUNT_ID = AWS Account ID
-
-# Chạy Ansible
-source /home/nhatnguyen/kolla-venv/bin/activate
-source /etc/kolla/admin-openrc.sh 
-cd ansible
-ansible all -m ping
-ansible-playbook site.yml
-```
----
-
-## 3. Kiểm tra hệ thống sau khi deploy
-### ELK
-1. Provision Kibana
-```bash
-cd elk
 python3 kibana/provision_kibana.py
 ```
----
 
-## 4. Chi tiết về cấu trúc
-### A. Tự động hóa Hạ tầng AWS (OIDC & ECR)
-**Chi tiết file:** terraform/aws/oidc.tf
-*   **AWS OIDC Provider:** Tích hợp OIDC liên kết an toàn giữa AWS và GitHub Actions.
-*   **IAM Role (`github-actions-ecr-push-role`):** Cấp quyền cho GitHub Actions tự động đăng nhập và đẩy ảnh lên ECR thông qua Role ARN mà không cần dùng Access Keys.
-*   **IAM Instance Profile (`waf-ec2-instance-profile`):** Gắn trực tiếp vào máy ảo AWS WAF EC2, cấp quyền cho máy ảo tự đăng nhập và kéo ảnh từ ECR (`ECR ReadOnly`) mà không cần lưu bất cứ thông tin bảo mật nào trên ổ đĩa.
-*   **ECR Repository (`my-waf-nginx`):** Kho chứa Docker Image WAF chính thức tích hợp quét lỗ hổng khi push (`scan_on_push = true`).
+Logging hien dung Filebeat -> Logstash -> Elasticsearch -> Kibana. Dashboard can tiep tuc mo rong de phan biet ingress, east-west, failover va failback.
 
-### B. Cài đặt Nginx WAF bằng Docker Container
-**Chi tiết file:** 
-*   ansible/roles/nginx_waf/tasks/main.yml
-*   ansible/roles/nginx_waf/templates/docker-compose.yml.j2
-*   ansible/roles/nginx_waf/handlers/main.yml
+## Luu Y Van Hanh
 
-*   **Dọn dẹp Nginx cũ:** Gỡ bỏ hoàn toàn Nginx cài native trên hệ điều hành của AWS Host để giải phóng cổng 80/443.
-*   **Cài đặt Docker CE & Docker Compose:** Ansible tự động cài đặt Docker lên AWS Host.
-*   **Chạy WAF Container dạng Host Network:** Docker Compose kích hoạt container WAF sử dụng card mạng Host để kết nối trực tiếp với WireGuard sang OpenStack.
-*   **Mount Volume Rules:** File rule set từ ML `RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf` được mount trực tiếp từ Host vào Container.
-*   **Cơ chế Hot-Reload (Không Downtime):** Khi rule thay đổi, Ansible chỉ chạy lệnh `docker exec waf-nginx nginx -s reload`. Rule mới áp dụng sau **0.5 giây** mà không cần khởi động lại container, không gây gián đoạn người dùng.
-
-### C. Pipeline CI/CD GitHub Actions (Chống Vòng Lặp Vô Hạn)
-**Chi tiết file:** .github/workflows/deploy.yml
-
-Pipeline tự động chạy khi push code lên GitHub nhưng **hoàn toàn loại trừ vòng lặp vô hạn**:
-*   **Cơ chế paths-ignore:**
-    ```yaml
-    paths-ignore:
-      - 'ansible/roles/nginx_waf/files/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf'
-      - 'modsec-learn/**'
-      - '**.md'
-    ```
-    *Khi quy trình retraining ML xuất ra file Rule mới và commit ngược lại Git, GitHub Actions đọc thấy tệp tin này nằm trong danh sách ignore và **KHÔNG** kích hoạt lại build image, ngăn ngừa vòng lặp vô hạn.*
-*   **SAST & Trivy Scan:** Quét mã nguồn tĩnh và quét lỗ hổng thư viện bên trong Docker Image trước khi đẩy lên ECR.
-*   **SSH Deploy:** SSH trực tiếp vào EC2, sử dụng IAM Instance Profile của EC2 để đăng nhập ECR và chạy `docker compose pull && docker compose up -d` tức thì.
-
----
-
-## 5. Hướng dẫn vận hành hệ thống
-
-### Bước 1: Thiết lập Secrets trên GitHub
-Để GitHub Actions có quyền kết nối tới AWS và EC2 ta cấu hình các Secrets sau tại Repo GitHub (*Settings -> Secrets and variables -> Actions -> Repository secrets*):
-1.  **`AWS_ROLE_ARN`**: `arn:aws:iam::<AWS-ACCOUNT-ID>:role/github-actions-ecr-push-role`
-2.  **`EC2_WAF_HOST`**: `<waf_public_ip>' (IP Public của AWS WAF Node)
-3.  **`EC2_SSH_PRIVATE_KEY`**: Nội dung tệp Private SSH Key dùng để đăng nhập vào WAF Node.
-
-### Bước 2: Kích hoạt Triển khai lần đầu (Git Push)
-Sau khi chỉnh sửa xong mã nguồn. Push lên GitHub để kích hoạt build WAF Image đầu tiên:
-```bash
-git add .
-git commit -m "DevSecOps: Set up Dockerized WAF with GitHub Actions CI/CD"
-git push origin main
-```
-*Vào tab **Actions** trên GitHub để theo dõi quy trình build, quét Trivy và Deploy tự động.*
-
-### Bước 3: Chu trình Retrain Mô hình & Cập nhật luật ML (Zero Downtime)
-Yêu cầu, phải hoàn tất các bước trong Local_ML.md trước đó. Khi thực hiện huấn luyện lại mô hình ML thành công ở máy local:
-1.  Chạy script trích xuất luật tối ưu từ mô hình của bạn:
-    ```bash
-    python3 modsec-learn/scripts/export_tuned_rules.py --model linear_svc_pl4_l1.joblib
-    ```
-    *Script này sẽ tự động ghi đè tệp luật loại trừ mới vào thư mục local:* `ansible/roles/nginx_waf/files/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf`.
-2.  Chạy playbook Ansible để đẩy luật mới lên WAF cực nhanh (chỉ mất 2 giây):
-    ```bash
-    ansible-playbook -i inventories/production/hosts.yml waf.yml --tags "update_rules"
-    ```
-    *Ansible sẽ đồng bộ tệp luật lên AWS Host và gọi lệnh reload Nginx container. Luật áp dụng ngay lập tức mà không gây downtime!*
-3.  Đẩy tệp luật mới lên Git để lưu trữ lịch sử phiên bản (GitOps):
-    ```bash
-    git add ansible/roles/nginx_waf/files/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
-    git commit -m "MLOps: Tuned rules update from MLflow run [skip ci]"
-    git push origin main
-    ```
-    *(GitHub Actions sẽ tự động bỏ qua không chạy lại build nhờ cấu hình `paths-ignore` và tag `[skip ci]`).*
-
-### Bước 4: Kiểm tra trạng thái hoạt động trên AWS WAF Node
-Đăng nhập SSH vào máy chủ AWS WAF Node và chạy các lệnh kiểm tra:
-*   **Xem tài nguyên tiêu hao thực tế (Live Stats):**
-    ```bash
-    docker stats waf-nginx
-    ```
-*   **Xem lịch sử Log truy cập của WAF:**
-    ```bash
-    docker logs -f waf-nginx
-    ```
-*   **Kiểm tra xem ModSecurity đã được nạp thành công chưa:**
-    ```bash
-    docker exec waf-nginx nginx -T | grep -i modsecurity
-    ```
-
----
-
-## 6. Thiết lập Cảnh báo (Alerting) & Phản hồi SOC (Feedback Loop)
-
-Hệ thống cung cấp chu trình khép kín giúp SOC analyst có thể phát hiện cảnh báo và trực tiếp gắn nhãn dữ liệu (đúng/sai) ngay từ Kibana hoặc qua Dashboard tương tác để tái huấn luyện mô hình.
-
-### A. Khởi chạy và Sử dụng SOC Feedback Dashboard (Port 5005)
-Chạy dịch vụ feedback API và giao diện Dashboard ở máy huấn luyện local:
-```bash
-python3 modsec-learn/scripts/feedback_api.py
-```
-Giao diện quản lý sự cố tương tác sẽ khả dụng tại **`http://localhost:5005/`**.
-*   **Tính năng chính:**
-    1.  **Ghi nhận mã sự cố:** Hiển thị trực tiếp mã định danh sự cố `ES Doc ID` lấy từ Elasticsearch.
-    2.  **Lưu giữ trạng thái:** Đọc dữ liệu local tại thời điểm tải trang. Nếu một payload đã được duyệt và lưu vào dataset, giao diện sẽ hiển thị trạng thái tĩnh **Confirmed Attack 🔴** hoặc **Reclassified Benign 🟢** thay vì hiển thị lại các nút bấm.
-    3.  **Hành động một chạm:** Analyst có thể phân loại nhanh các sự cố chưa xử lý bằng cách nhấn nút gắn nhãn.
-
-### B. Thiết lập Cảnh báo nội bộ (Alerting Rules) trên Kibana
-Nếu không cấu hình các dịch vụ Webhook ngoài (Slack/Discord), bạn nên ghi nhận cảnh báo vào một Elasticsearch Index riêng biệt:
-1.  Truy cập Kibana Dashboard, vào **Stack Management** -> **Rules** -> click **Create rule**.
-2.  Chọn loại rule **Elasticsearch query** -> Chọn **Query DSL**
-3.  Cấu hình Index Pattern / Data View là **`siem-waf-access-*`**.
-4.  Cấu hình trường thời gian (Time field) là **`@timestamp`**.
-5.  Định nghĩa bộ lọc (Query DSL):
-```json
-{
-    "query": {
-        "bool": {
-            "must": [
-                {
-                    "term": {
-                        "fields.node_role.keyword": "waf"
-                    }
-                },
-                {
-                    "query_string": {
-                        "query": "status_code: 403"
-                    }
-                }
-            ]
-        }
-    }
-}
- ```
-6.  Chọn điều kiện: `WHEN count() OVER all documents IS ABOVE 10 FOR THE LAST 5 minutes`.
-7.  Trong mục **Actions**, chọn Connector là **Index** (Ghi vào index nội bộ):
-    *   **Index:** `siem-alerts-history`
-    *   **Document (JSON):**
-```json
-{
-    "alert_time": "{{context.date}}",
-    "rule_name": "{{rule.name}}",
-    "rule_id": "{{rule.id}}",
-    "message": "Phát hiện tấn công dồn dập bị chặn bởi WAF Node!",
-    "matched_requests_count": "{{context.hits.total.value}}"
-}
-```
-
-### C. Thiết lập Dashboard Giám sát trên Kibana Lens
-Do log đã được Logstash parse trực tiếp thành các trường có cấu trúc, bạn không cần dùng Painless script để trích xuất thủ công như trước.
-
-#### 1. Các trường dữ liệu đã được parse sẵn:
-*   **`client_ip`**: Địa chỉ IP gốc của người dùng (trích xuất từ `x_forwarded_for` hoặc `client`).
-*   **`status_code`**: Mã trạng thái phản hồi HTTP (đã được ép kiểu sang Integer để lọc).
-*   **`request_path`**: Đường dẫn URL chi tiết (URI).
-*   **`time_local`**: Thời gian hệ thống ghi nhận log.
-
-#### 2. Xây dựng trang giám sát bảo mật & sức khỏe hệ thống
-Vào **Analytics** -> **Dashboard** -> click **Create dashboard** và thêm các Widget sau:
-*   **Tổng số cuộc tấn công bị chặn (Metric):**
-    *   Data View: `SIEM - WAF Access` (`siem-waf-access-*`)
-    *   Filter: `status_code : 403`
-    *   Primary metric: `Count of records`
-*   **Top IP Tấn công (Data Table):**
-    *   Data View: `SIEM - WAF Access` (`siem-waf-access-*`)
-    *   Filter: `status_code : 403`
-    *   Rows: Kéo thả trường `client_ip`
-    *   Metric: `Count of records`
-*   **Tần suất chặn theo thời gian (Line/Area Chart):**
-    *   Data View: `SIEM - WAF Access` (`siem-waf-access-*`)
-    *   Filter: `status_code : 403`
-    *   X-axis: `@timestamp` | Y-axis: `Count of records` | Breakdown: `client_ip`
-*   **Tỉ lệ mã trạng thái HTTP tại WAF Proxy (Donut Chart):**
-    *   Data View: `SIEM - WAF Access` (`siem-waf-access-*`)
-    *   Metric: `Count of records` | Slice by: `status_code`
-*   **Kiểm toán đăng nhập SSH (Data Table):**
-    *   Data View: `SIEM - Syslog` (`siem-syslog-*`)
-    *   Filter: `message : "Accepted"`
-    *   Rows: `@timestamp`, `host.name`, `message`
-
----
-
-## 7. Tái huấn luyện Mô hình học máy (Retraining Pipeline)
-
-Sau khi thu thập đủ dữ liệu feedback và phân tách các log từ máy chủ (tránh trùng lặp nhờ cơ chế giải quyết xung đột tích hợp sẵn trong script `extract_logs.py`), bạn tiến hành tái huấn luyện mô hình theo các bước sau:
-
-1.  **Trích xuất log mới và đồng bộ dataset:**
-    ```bash
-    python3 modsec-learn/scripts/extract_logs.py
-    ```
-2.  **Kích hoạt môi trường ảo AI:**
-    ```bash
-    source ~/modsec-ai-venv/bin/activate
-    ```
-3.  **Vào thư mục dự án và chạy huấn luyện:**
-    ```bash
-    cd ~/modsec-learn
-    python3 scripts/run_training.py
-    ```
-    *Script sẽ nạp tập dữ liệu huấn luyện đã làm sạch, trích xuất đặc trưng cho các Paranoia Levels từ 1 đến 4, huấn luyện các mô hình SVM, Random Forest, Logistic Regression và xuất các tệp `.joblib` mới vào `data/models/`.*
-4.  **Kiểm tra và đánh giá mô hình:**
-    ```bash
-    python3 scripts/run_experiments.py
-    ```
-5.  **Trích xuất luật loại trừ tối ưu từ mô hình AI:**
-    ```bash
-    python3 scripts/export_tuned_rules.py --model linear_svc_pl4_l1.joblib
-    ```
-    *Script sẽ phân tích trọng số mô hình SVM L1, tạo tệp `RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf` chứa các ID bị loại bỏ (trọng số 0) và ghi trực tiếp vào thư mục files của Ansible.*
-6.  **Đồng bộ và kích hoạt luật mới lên WAF Node (AWS):**
-    ```bash
-    cd ../ansible
-    ansible-playbook -i inventories/production/hosts.yml waf.yml
-    ```
-    *Ansible tự động sao chép tệp luật loại trừ mới lên máy chủ AWS và ra lệnh nạp lại cấu hình Nginx (`nginx -s reload`) giúp luật có hiệu lực ngay lập tức với zero-downtime.*
-
----
-
-## 8. Cải tiến kiến trúc & Điều chỉnh Hệ thống (Bổ sung mới)
-
-Trong quá trình hoàn thiện hạ tầng, các thay đổi quan trọng sau đã được tích hợp nhằm tối ưu hóa vòng lặp thu thập - huấn luyện - phản hồi:
-
-### A. Phân Tách Layer Dữ Liệu Log (Index Separation)
-Hệ thống log thô trước đây được Logstash đẩy dồn về một index duy nhất (`siem-hybrid-*`). Hiện tại, luồng Logstash pipeline đã được tái cấu trúc thành 3 index riêng biệt:
-1.  **`siem-waf-access-*`**: Ghi nhận Nginx access log kèm mã chặn ModSecurity 403 từ AWS WAF.
-2.  **`siem-app-access-*`**: Ghi nhận log console (stdout) của ứng dụng Juice Shop từ OpenStack App Node.
-3.  **`siem-syslog-*`**: Ghi nhận log hệ thống của toàn bộ VM.
-
-### B. Whitelist Kết Nối socket.io (ModSecurity Exclusions)
-Ứng dụng Juice Shop sử dụng `socket.io` chạy ngầm. Giao thức này gửi request POST dạng `text/plain` và đi kèm IP public trực tiếp, vi phạm 2 luật CRS `920350` (Host là IP) và `920420` (Content-type không hợp lệ).
-*   **Giải pháp**: Thêm Exclusion Rule `10001` vào `RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf` để tự động whitelist 2 rule trên đối với tất cả các request bắt đầu bằng `/socket.io/`, khắc phục triệt để lỗi 403 giả lập.
-
-### C. Chuẩn Hóa Định Dạng Log & Đồng Bộ API
-*   Nginx WAF sử dụng log format `main` tích hợp chi tiết `$request_time` và `$x_forwarded_for`.
-*   Các script `extract_logs.py` và `feedback_api.py` được tối ưu hóa để truy vấn đúng index `siem-waf-access-*` và ưu tiên trích xuất trực tiếp các trường cấu trúc do Logstash cung cấp, đảm bảo hiệu năng và tính ổn định.
-
----
-
-## 9. Thư mục Scripts MLOps dự phòng cho GitHub
-
-Để phục vụ lưu trữ phiên bản trên GitHub (do thư mục `modsec-learn` không thể đẩy trực tiếp lên Git của repo chính), toàn bộ 7 script MLOps và sinh dữ liệu tùy chỉnh trong phiên làm việc đã được sao chép ra thư mục:
-📁 **`scripts/`** (nằm trực tiếp tại gốc của Repo chính).
-
-Các script bao gồm:
-*   `generate_benign.py`: Giả lập lưu lượng sạch từ người dùng bình thường vào ứng dụng Juice Shop.
-*   `generate_attacks.py`: Giả lập lưu lượng tấn công SQL Injection bị WAF chặn để lấy mẫu log 403.
-*   `feedback_api.py`: Giao diện Dashboard quản lý sự cố và tiếp nhận nhãn phản hồi SOC tự động lưu trạng thái.
-*   `extract_logs.py`: Quét log từ SIEM về máy huấn luyện, tự động loại bỏ trùng lặp và xung đột dữ liệu.
-*   `run_training.py`: Huấn luyện lại toàn bộ mô hình AI cho cả 4 Paranoia Levels.
-*   `run_experiments.py`: Đo lường, chạy kiểm thử đánh giá độ chính xác của các mô hình.
-*   `export_tuned_rules.py`: Trích xuất các rule dư thừa từ mô hình tối ưu hóa SVM L1 và lưu trực tiếp vào thư mục phân phối của Ansible.
-
-## 10. Dọn dẹp môi trường (Destroy)
-
-1. **Hủy tài nguyên trên OpenStack**:
-   ```bash
-   source ~/kolla-venv/bin/activate
-   source /etc/kolla/admin-openrc.sh
-   cd /home/deployer/Downloads/Project/terraform/openstack
-   terraform destroy -auto-approve
-   ```
-
-2. **Hủy tài nguyên trên AWS**:
-   ```bash
-   cd /home/deployer/Downloads/Project/terraform/aws
-   terraform destroy -auto-approve
-   ```
-
-3. **Dọn dẹp cụm Elasticsearch/Kibana local**:
-   ```bash
-   cd /home/deployer/Downloads/Project/elk
-   sudo docker compose down -v
-    ```
-
-*(Tùy chọn) Dọn dẹp SSH known_hosts để lần sau không bị lỗi cảnh báo Man-in-the-middle do IP cũ cấp lại cho máy ảo mới:*
-```bash
-rm -f ~/.ssh/known_hosts
+- `openstack_vpn_public_cidr` phai la WAN/NAT public IP that cua laptop/OpenStack AIO, khong phai floating IP `172.10.10.x`.
+- Neu WAN IP doi, AWS WireGuard SG se chan tunnel cho den khi cap nhat `openstack_vpn_public_cidr` va `terraform apply`.
+- App AWS va OpenStack cung doc/ghi PostgreSQL centralized tren `10.0.1.94`.
+- `/healthz` khong bi auth de Route 53 health check co the danh gia gateway/app path.
+- Self-signed TLS cert chi phu hop lab. Khi dung browser/demo chinh thuc nen cap public cert.
+- Chi tiet lich su thay doi nam trong `docs/task.md`.

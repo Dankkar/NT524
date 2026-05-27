@@ -28,6 +28,211 @@
     group: root
     mode: "0644"
 
+- name: Configure public DNS resolvers
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: |
+      nameserver 8.8.8.8
+      nameserver 1.1.1.1
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable IPv4 forwarding on OpenStack WAF
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: '^net\.ipv4\.ip_forward='
+    line: net.ipv4.ip_forward=1
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Apply IPv4 forwarding on OpenStack WAF
+  ansible.builtin.command: sysctl -w net.ipv4.ip_forward=1
+  changed_when: false
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Detect OpenStack WAF app-side interface
+  ansible.builtin.shell: "ip route get {{ app_backend_host }} | awk '{for (i=1; i<=NF; i++) if ($i == \"dev\") {print $(i+1); exit}}'"
+  args:
+    executable: /bin/bash
+  register: openstack_waf_app_interface_cmd
+  changed_when: false
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Detect OpenStack WAF transit interface
+  ansible.builtin.shell: "ip route get {{ openstack_vpn_app_ip }} | awk '{for (i=1; i<=NF; i++) if ($i == \"dev\") {print $(i+1); exit}}'"
+  args:
+    executable: /bin/bash
+  register: openstack_waf_transit_interface_cmd
+  changed_when: false
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Store OpenStack WAF routing interfaces
+  ansible.builtin.set_fact:
+    openstack_waf_app_interface: "{{ openstack_waf_app_interface_cmd.stdout | trim }}"
+    openstack_waf_transit_interface: "{{ openstack_waf_transit_interface_cmd.stdout | trim }}"
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Require OpenStack WAF routing interfaces
+  ansible.builtin.assert:
+    that:
+      - openstack_waf_app_interface | length > 0
+      - openstack_waf_transit_interface | length > 0
+    fail_msg: "Could not detect OpenStack WAF transit/app interfaces."
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Check OpenStack WAF forward rule to app net
+  ansible.builtin.command: >-
+    iptables -C FORWARD
+    -i {{ openstack_waf_transit_interface }}
+    -o {{ openstack_waf_app_interface }}
+    -d {{ openstack_app_cidr }}
+    -j ACCEPT
+  register: openstack_waf_forward_to_app_check
+  changed_when: false
+  failed_when: openstack_waf_forward_to_app_check.rc not in [0, 1]
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Add OpenStack WAF forward rule to app net
+  ansible.builtin.command: >-
+    iptables -A FORWARD
+    -i {{ openstack_waf_transit_interface }}
+    -o {{ openstack_waf_app_interface }}
+    -d {{ openstack_app_cidr }}
+    -j ACCEPT
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+    - openstack_waf_forward_to_app_check.rc == 1
+
+- name: Check OpenStack WAF forward rule from app net
+  ansible.builtin.command: >-
+    iptables -C FORWARD
+    -i {{ openstack_waf_app_interface }}
+    -o {{ openstack_waf_transit_interface }}
+    -s {{ openstack_app_cidr }}
+    -m conntrack --ctstate RELATED,ESTABLISHED
+    -j ACCEPT
+  register: openstack_waf_forward_from_app_check
+  changed_when: false
+  failed_when: openstack_waf_forward_from_app_check.rc not in [0, 1]
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Add OpenStack WAF forward rule from app net
+  ansible.builtin.command: >-
+    iptables -A FORWARD
+    -i {{ openstack_waf_app_interface }}
+    -o {{ openstack_waf_transit_interface }}
+    -s {{ openstack_app_cidr }}
+    -m conntrack --ctstate RELATED,ESTABLISHED
+    -j ACCEPT
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+    - openstack_waf_forward_from_app_check.rc == 1
+
+- name: Check OpenStack WAF app NAT rules
+  ansible.builtin.command: >-
+    iptables -t nat -C POSTROUTING
+    -s {{ item }}
+    -d {{ openstack_app_cidr }}
+    -o {{ openstack_waf_app_interface }}
+    -j MASQUERADE
+  loop: "{{ openstack_waf_app_nat_source_cidrs }}"
+  register: openstack_waf_app_nat_checks
+  changed_when: false
+  failed_when: openstack_waf_app_nat_checks.rc not in [0, 1]
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Add OpenStack WAF app NAT rules
+  ansible.builtin.command: >-
+    iptables -t nat -A POSTROUTING
+    -s {{ item.item }}
+    -d {{ openstack_app_cidr }}
+    -o {{ openstack_waf_app_interface }}
+    -j MASQUERADE
+  loop: "{{ openstack_waf_app_nat_checks.results | selectattr('rc', 'equalto', 1) | list }}"
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Install OpenStack WAF routing restore script
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/openstack-waf-routing.sh
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      set -e
+      /usr/sbin/sysctl -w net.ipv4.ip_forward=1 >/dev/null
+      /usr/sbin/iptables -C FORWARD -i {{ openstack_waf_transit_interface }} -o {{ openstack_waf_app_interface }} -d {{ openstack_app_cidr }} -j ACCEPT || \
+        /usr/sbin/iptables -A FORWARD -i {{ openstack_waf_transit_interface }} -o {{ openstack_waf_app_interface }} -d {{ openstack_app_cidr }} -j ACCEPT
+      /usr/sbin/iptables -C FORWARD -i {{ openstack_waf_app_interface }} -o {{ openstack_waf_transit_interface }} -s {{ openstack_app_cidr }} -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || \
+        /usr/sbin/iptables -A FORWARD -i {{ openstack_waf_app_interface }} -o {{ openstack_waf_transit_interface }} -s {{ openstack_app_cidr }} -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+      {% for cidr in openstack_waf_app_nat_source_cidrs %}
+      /usr/sbin/iptables -t nat -C POSTROUTING -s {{ cidr }} -d {{ openstack_app_cidr }} -o {{ openstack_waf_app_interface }} -j MASQUERADE || \
+        /usr/sbin/iptables -t nat -A POSTROUTING -s {{ cidr }} -d {{ openstack_app_cidr }} -o {{ openstack_waf_app_interface }} -j MASQUERADE
+      {% endfor %}
+  register: openstack_waf_routing_script
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Install OpenStack WAF routing service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/openstack-waf-routing.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Restore OpenStack WAF routing and NAT rules
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/openstack-waf-routing.sh
+
+      [Install]
+      WantedBy=multi-user.target
+  register: openstack_waf_routing_unit
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Enable OpenStack WAF routing service
+  ansible.builtin.systemd:
+    name: openstack-waf-routing.service
+    enabled: true
+    state: started
+    daemon_reload: "{{ openstack_waf_routing_script.changed or openstack_waf_routing_unit.changed }}"
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
 # --- CLEAN UP NATIVE NGINX INSTALLATION ---
 
 - name: Stop and disable native Nginx service
@@ -54,6 +259,12 @@
 
 # --- INSTALL DOCKER AND DOCKER COMPOSE ---
 
+- name: Check Docker CLI
+  ansible.builtin.command: docker --version
+  register: docker_cli_check
+  changed_when: false
+  failed_when: false
+
 - name: Install Docker and dependencies from Ubuntu repository
   ansible.builtin.apt:
     name:
@@ -66,6 +277,7 @@
     lock_timeout: 600
   environment:
     DEBIAN_FRONTEND: noninteractive
+  when: docker_cli_check.rc != 0
 
 - name: Ensure Docker service is running
   ansible.builtin.systemd:
@@ -116,6 +328,11 @@
 
 # --- DOWNLOAD MODSECURITY CORE CONFIGS ---
 
+- name: Check recommended modsecurity.conf
+  ansible.builtin.stat:
+    path: /opt/waf-nginx/modsec/modsecurity.conf
+  register: modsecurity_conf_stat
+
 - name: Download recommended modsecurity.conf
   ansible.builtin.get_url:
     url: https://raw.githubusercontent.com/SpiderLabs/ModSecurity/v3/master/modsecurity.conf-recommended
@@ -123,6 +340,12 @@
     owner: root
     group: root
     mode: "0644"
+  when: not modsecurity_conf_stat.stat.exists
+
+- name: Check ModSecurity unicode.mapping
+  ansible.builtin.stat:
+    path: /opt/waf-nginx/modsec/unicode.mapping
+  register: unicode_mapping_stat
 
 - name: Download ModSecurity unicode.mapping
   ansible.builtin.get_url:
@@ -131,6 +354,7 @@
     owner: root
     group: root
     mode: "0644"
+  when: not unicode_mapping_stat.stat.exists
 
 - name: Enable ModSecurity SecRuleEngine in config
   ansible.builtin.replace:
@@ -140,6 +364,11 @@
 
 # --- CONFIGURE OWASP CRS V4.0.0 ---
 
+- name: Check OWASP CRS checkout
+  ansible.builtin.stat:
+    path: /opt/waf-nginx/modsec/coreruleset/.git
+  register: owasp_crs_checkout_stat
+
 - name: Clone OWASP CRS Core Rule Set (v4.0.0)
   ansible.builtin.git:
     repo: https://github.com/coreruleset/coreruleset.git
@@ -147,6 +376,7 @@
     version: v4.0.0
     depth: 1
     recursive: no
+  when: not owasp_crs_checkout_stat.stat.exists
 
 - name: Copy OWASP CRS main configuration
   ansible.builtin.copy:
@@ -191,19 +421,31 @@
 
 # --- ECR AUTHENTICATION AND RUN CONTAINER ---
 
+- name: Check WAF image on host
+  ansible.builtin.command: "docker image inspect {{ waf_image }}"
+  register: waf_image_check
+  changed_when: false
+  failed_when: false
+
 - name: Install AWS CLI on WAF host
   ansible.builtin.apt:
     name: awscli
     state: present
     update_cache: true
-  when: waf_ecr_login_enabled | default(true) and not (waf_ecr_login_from_controller | default(false))
+  when:
+    - waf_image_check.rc != 0
+    - waf_ecr_login_enabled | default(true)
+    - not (waf_ecr_login_from_controller | default(false))
 
 - name: Authenticate Docker with AWS ECR from WAF host
   ansible.builtin.shell: |
     aws ecr get-login-password --region {{ waf_ecr_region | default('ap-southeast-1') }} | docker login --username AWS --password-stdin {{ waf_image.split('/')[0] }}
   changed_when: false
   no_log: true
-  when: waf_ecr_login_enabled | default(true) and not (waf_ecr_login_from_controller | default(false))
+  when:
+    - waf_image_check.rc != 0
+    - waf_ecr_login_enabled | default(true)
+    - not (waf_ecr_login_from_controller | default(false))
 
 - name: Get ECR login password on Ansible controller
   ansible.builtin.command: "aws ecr get-login-password --region {{ waf_ecr_region | default('ap-southeast-1') }}"
@@ -212,7 +454,10 @@
   register: waf_ecr_controller_password
   changed_when: false
   no_log: true
-  when: waf_ecr_login_enabled | default(true) and waf_ecr_login_from_controller | default(false)
+  when:
+    - waf_image_check.rc != 0
+    - waf_ecr_login_enabled | default(true)
+    - waf_ecr_login_from_controller | default(false)
 
 - name: Authenticate Docker with AWS ECR using controller token
   ansible.builtin.command:
@@ -220,12 +465,16 @@
     stdin: "{{ waf_ecr_controller_password.stdout }}"
   changed_when: false
   no_log: true
-  when: waf_ecr_login_enabled | default(true) and waf_ecr_login_from_controller | default(false)
+  when:
+    - waf_image_check.rc != 0
+    - waf_ecr_login_enabled | default(true)
+    - waf_ecr_login_from_controller | default(false)
 
 - name: Pull WAF image from ECR
   ansible.builtin.command: "docker pull {{ waf_image }}"
   register: waf_pull
   changed_when: "'Downloaded newer image' in waf_pull.stdout or 'Pull complete' in waf_pull.stdout"
+  when: waf_image_check.rc != 0
 
 - name: Remove existing WAF Nginx container
   ansible.builtin.command: docker rm -f waf-nginx

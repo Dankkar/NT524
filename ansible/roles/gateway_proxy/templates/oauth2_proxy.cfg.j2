@@ -1,0 +1,24 @@
+http_address = "127.0.0.1:4180"
+provider = "oidc"
+oidc_issuer_url = "{{ oauth2_proxy_oidc_issuer_url }}"
+client_id = "{{ oauth2_proxy_client_id }}"
+client_secret = "{{ oauth2_proxy_client_secret }}"
+redirect_url = "{{ gateway_public_scheme | default('https') }}://{{ gateway_public_host }}/oauth2/callback"
+
+email_domains = {{ oauth2_proxy_email_domains | default(['*']) | to_json }}
+scope = "openid email profile"
+upstreams = ["static://200"]
+
+cookie_secret = "{{ oauth2_proxy_cookie_secret }}"
+cookie_name = "_hybrid_auth"
+cookie_domains = ["{{ oauth2_proxy_cookie_domain | default('.' ~ gateway_public_host) }}"]
+cookie_secure = {{ ((gateway_public_scheme | default('https')) == 'https') | ternary('true', 'false') }}
+cookie_samesite = "lax"
+
+set_xauthrequest = true
+pass_access_token = true
+pass_authorization_header = false
+pass_user_headers = true
+reverse_proxy = true
+skip_provider_button = true
+silence_ping_logging = true

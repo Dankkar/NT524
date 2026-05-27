@@ -74,6 +74,25 @@ resource "aws_instance" "waf_node" {
   depends_on = [aws_instance.vpn_gateway]
 }
 
+resource "aws_instance" "gateway_node" {
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = var.instance_type
+  subnet_id                   = var.subnet_id
+  key_name                    = aws_key_pair.vpn_key.key_name
+  associate_public_ip_address = true
+
+  vpc_security_group_ids = [var.gateway_sg_id]
+
+  user_data = <<-EOF
+              #!/bin/bash
+              # Gateway Nginx/oauth2-proxy will be provisioned by Ansible.
+              EOF
+
+  tags = {
+    Name = var.gateway_node_name
+  }
+}
+
 resource "aws_instance" "app_node" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
@@ -96,12 +115,12 @@ resource "aws_instance" "app_node" {
   depends_on = [aws_instance.vpn_gateway, aws_instance.waf_node]
 }
 
-resource "aws_eip" "waf_eip" {
-  domain   = "vpc"
-  instance = aws_instance.waf_node.id
-}
-
 resource "aws_eip" "vpn_eip" {
   domain   = "vpc"
   instance = aws_instance.vpn_gateway.id
+}
+
+resource "aws_eip" "gateway_eip" {
+  domain   = "vpc"
+  instance = aws_instance.gateway_node.id
 }

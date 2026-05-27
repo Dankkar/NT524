@@ -29,16 +29,29 @@ all:
         aws_waf:
           hosts:
             aws-waf:
-              ansible_host: CHANGE_ME_AWS_WAF_PUBLIC_IP
+              ansible_host: CHANGE_ME_AWS_WAF_PRIVATE_IP
               ansible_user: ubuntu
               app_backend_host: CHANGE_ME_AWS_APP_PRIVATE_IP
+              ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand='ssh -i ~/.ssh/aws_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_AWS_GATEWAY_PUBLIC_IP'"
         openstack_waf:
           hosts:
             openstack-waf:
               ansible_host: CHANGE_ME_OPENSTACK_WAF_PRIVATE_IP
               ansible_user: ubuntu
               app_backend_host: CHANGE_ME_OPENSTACK_APP_PRIVATE_IP
-              ansible_ssh_common_args: "-o ProxyCommand='ssh -i ~/.ssh/openstack_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_OPENSTACK_VPN_FLOATING_IP'"
+              ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand='ssh -i ~/.ssh/openstack_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_OPENSTACK_VPN_FLOATING_IP'"
+    gateway_nodes:
+      hosts:
+        aws-gateway:
+          ansible_host: CHANGE_ME_AWS_GATEWAY_PUBLIC_IP
+          ansible_user: ubuntu
+          gateway_upstream_host: CHANGE_ME_AWS_WAF_PRIVATE_IP
+          gateway_upstream_port: 80
+        openstack-gateway:
+          ansible_host: CHANGE_ME_OPENSTACK_VPN_FLOATING_IP
+          ansible_user: ubuntu
+          gateway_upstream_host: CHANGE_ME_OPENSTACK_WAF_PRIVATE_IP
+          gateway_upstream_port: 80
     app_nodes:
       hosts:
         aws-app:
@@ -48,10 +61,10 @@ all:
         openstack-app:
           ansible_host: CHANGE_ME_OPENSTACK_APP_PRIVATE_IP
           ansible_user: ubuntu
-          ansible_ssh_common_args: "-o ProxyCommand='ssh -i ~/.ssh/openstack_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_OPENSTACK_VPN_FLOATING_IP'"
+          ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand='ssh -i ~/.ssh/openstack_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_OPENSTACK_VPN_FLOATING_IP'"
     db_nodes:
       hosts:
         openstack-db:
           ansible_host: CHANGE_ME_OPENSTACK_DB_PRIVATE_IP
           ansible_user: ubuntu
-          ansible_ssh_common_args: "-o ProxyCommand='ssh -i ~/.ssh/openstack_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_OPENSTACK_VPN_FLOATING_IP'"
+          ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand='ssh -i ~/.ssh/openstack_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_OPENSTACK_VPN_FLOATING_IP'"

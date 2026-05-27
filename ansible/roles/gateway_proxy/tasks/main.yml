@@ -1,0 +1,176 @@
+---
+- name: Wait for cloud-init to finish
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'if command -v cloud-init >/dev/null 2>&1; then cloud-init status --wait; fi'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Wait for apt/dpkg locks
+  ansible.builtin.shell: >-
+    timeout 600 bash -c
+    'while command -v fuser >/dev/null 2>&1 &&
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+    /var/cache/apt/archives/lock /var/lib/apt/lists/lock >/dev/null 2>&1;
+    do sleep 5; done'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Configure resolver for gateway package installs
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: |
+      nameserver 8.8.8.8
+      nameserver 1.1.1.1
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install Nginx gateway proxy
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - ca-certificates
+      - curl
+      - openssl
+    state: present
+    update_cache: true
+    lock_timeout: 600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Create oauth2-proxy group
+  ansible.builtin.group:
+    name: oauth2-proxy
+    system: true
+  when: oauth2_proxy_enabled | default(false) | bool
+
+- name: Create oauth2-proxy user
+  ansible.builtin.user:
+    name: oauth2-proxy
+    group: oauth2-proxy
+    system: true
+    shell: /usr/sbin/nologin
+    home: /var/lib/oauth2-proxy
+    create_home: false
+  when: oauth2_proxy_enabled | default(false) | bool
+
+- name: Download oauth2-proxy release
+  ansible.builtin.get_url:
+    url: "https://github.com/oauth2-proxy/oauth2-proxy/releases/download/{{ oauth2_proxy_version | default('v7.15.2') }}/oauth2-proxy-{{ oauth2_proxy_version | default('v7.15.2') }}.linux-amd64.tar.gz"
+    dest: "/tmp/oauth2-proxy-{{ oauth2_proxy_version | default('v7.15.2') }}.linux-amd64.tar.gz"
+    mode: "0644"
+  when: oauth2_proxy_enabled | default(false) | bool
+
+- name: Extract oauth2-proxy release
+  ansible.builtin.unarchive:
+    src: "/tmp/oauth2-proxy-{{ oauth2_proxy_version | default('v7.15.2') }}.linux-amd64.tar.gz"
+    dest: /tmp
+    remote_src: true
+  when: oauth2_proxy_enabled | default(false) | bool
+
+- name: Install oauth2-proxy binary
+  ansible.builtin.copy:
+    src: "/tmp/oauth2-proxy-{{ oauth2_proxy_version | default('v7.15.2') }}.linux-amd64/oauth2-proxy"
+    dest: /usr/local/bin/oauth2-proxy
+    owner: root
+    group: root
+    mode: "0755"
+    remote_src: true
+  notify: Restart oauth2-proxy
+  when: oauth2_proxy_enabled | default(false) | bool
+
+- name: Create oauth2-proxy config directory
+  ansible.builtin.file:
+    path: /etc/oauth2-proxy
+    state: directory
+    owner: root
+    group: oauth2-proxy
+    mode: "0750"
+  when: oauth2_proxy_enabled | default(false) | bool
+
+- name: Configure oauth2-proxy
+  ansible.builtin.template:
+    src: oauth2_proxy.cfg.j2
+    dest: /etc/oauth2-proxy/oauth2-proxy.cfg
+    owner: root
+    group: oauth2-proxy
+    mode: "0640"
+  no_log: true
+  notify: Restart oauth2-proxy
+  when: oauth2_proxy_enabled | default(false) | bool
+
+- name: Install oauth2-proxy systemd unit
+  ansible.builtin.template:
+    src: oauth2-proxy.service.j2
+    dest: /etc/systemd/system/oauth2-proxy.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart oauth2-proxy
+  when: oauth2_proxy_enabled | default(false) | bool
+
+- name: Create gateway TLS directory
+  ansible.builtin.file:
+    path: /etc/nginx/ssl
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: gateway_tls_enabled | default(false) | bool
+
+- name: Create self-signed gateway certificate for lab HTTPS
+  ansible.builtin.command: >-
+    openssl req -x509 -nodes -newkey rsa:2048 -days 30
+    -keyout {{ gateway_tls_key_path | default('/etc/nginx/ssl/' ~ gateway_public_host ~ '.key') }}
+    -out {{ gateway_tls_cert_path | default('/etc/nginx/ssl/' ~ gateway_public_host ~ '.crt') }}
+    -subj /CN={{ gateway_public_host }}
+    -addext subjectAltName=DNS:{{ gateway_public_host }}
+  args:
+    creates: "{{ gateway_tls_cert_path | default('/etc/nginx/ssl/' ~ gateway_public_host ~ '.crt') }}"
+  notify: Reload gateway nginx
+  when:
+    - gateway_tls_enabled | default(false) | bool
+    - gateway_tls_self_signed | default(false) | bool
+
+- name: Remove default Nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload gateway nginx
+
+- name: Configure gateway proxy site
+  ansible.builtin.template:
+    src: gateway_proxy.conf.j2
+    dest: /etc/nginx/sites-available/gateway_proxy.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload gateway nginx
+
+- name: Enable gateway proxy site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/gateway_proxy.conf
+    dest: /etc/nginx/sites-enabled/gateway_proxy.conf
+    state: link
+  notify: Reload gateway nginx
+
+- name: Validate Nginx gateway config
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Ensure oauth2-proxy is running
+  ansible.builtin.systemd:
+    name: oauth2-proxy
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: oauth2_proxy_enabled | default(false) | bool
+
+- name: Ensure Nginx gateway is running
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started

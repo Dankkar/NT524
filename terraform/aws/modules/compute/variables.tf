@@ -14,6 +14,10 @@ variable "app_sg_id" {
   type = string
 }
 
+variable "gateway_sg_id" {
+  type = string
+}
+
 variable "public_key_path" {
   type = string
 }
@@ -35,6 +39,10 @@ variable "waf_node_name" {
 }
 
 variable "app_node_name" {
+  type = string
+}
+
+variable "gateway_node_name" {
   type = string
 }
 
