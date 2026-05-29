@@ -1,11 +1,18 @@
 # SIEM Hybrid Network/VPN Ansible
 
-This Ansible layer configures the current deployment milestones for the topology.
+This Ansible layer configures the current hybrid cloud deployment.
 
-Deferred roles:
+Implemented layers:
 
-- AWS WAF node: ModSecurity
-- MLflow/FastAPI/model integration
+- WireGuard site-to-site VPN.
+- Gateway Nginx + oauth2-proxy.
+- WAF Nginx + ModSecurity + OWASP CRS.
+- Lightweight Flask app and centralized PostgreSQL.
+- Filebeat on gateway/WAF/app/VPN nodes.
+- Logstash on the OpenStack VPN node.
+
+The Feedback API and ML rule export are local controller scripts under `scripts/`.
+GitHub Actions deploy has been removed. Use Ansible from the controller for WAF rule updates and full WAF redeploys.
 
 ## Order
 
@@ -43,6 +50,28 @@ Or run all configured stages:
 ansible-playbook site.yml
 ```
 
+## WAF Rule Updates After Feedback/ML
+
+When only `RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf` changes, do not rebuild the WAF image. Export the tuned rule locally, then copy it to AWS WAF and OpenStack WAF:
+
+```bash
+cd /home/deployer/Downloads/Project/modsec-learn
+~/modsec-ai-venv/bin/python ../scripts/run_training.py
+~/modsec-ai-venv/bin/python ../scripts/export_tuned_rules.py \
+  --model linear_svc_pl4_l1.joblib \
+  --threshold 1e-5
+
+cd /home/deployer/Downloads/Project
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
+ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
+/home/deployer/kolla-venv/bin/ansible-playbook \
+  -i ansible/inventories/production/hosts.yml \
+  ansible/waf.yml \
+  --tags update_rules
+```
+
+Run the full `ansible/waf.yml` playbook only when the WAF container image/config stack itself changes.
+
 ## Expected Tunnel
 
 - AWS VPN WireGuard IP: `10.200.0.1`
@@ -59,5 +88,5 @@ The OpenStack VPN gateway routes traffic to the WAF transit network. App and DB 
 - App node runs the lightweight Flask auth app in Docker, exposed on port `80`, using PostgreSQL through `DATABASE_URL`.
 - WAF node runs Nginx/ModSecurity as a reverse proxy to the app private IP.
 - Logstash runs on the OpenStack VPN node and writes to Elasticsearch on the laptop at `172.10.10.1:9200`.
-- Filebeat is installed on both App and WAF nodes.
-- Filebeat is configured to send to `{{ logstash_host }}:{{ logstash_port }}` from `group_vars/all.yml`; currently this resolves to `10.0.1.254:5044`.
+- Filebeat is installed on gateway, WAF, app and VPN nodes.
+- Filebeat is configured to send to `{{ logstash_host }}:{{ logstash_port }}` from `group_vars/all.yml`; currently this resolves to `10.0.2.254:5044`.

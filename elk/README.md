@@ -14,3 +14,18 @@ sudo docker compose up -d --remove-orphans
 ```
 
 Logstash writes Filebeat events to daily indices named `siem-hybrid-YYYY.MM.dd`.
+
+Current dashboard provisioning creates:
+
+- `SIEM Hybrid Overview`
+- `Service Health - Load & Error Monitoring`
+- `WAF Security - Attack & False Positive Review`
+- `Response Operations - WAF/Auth/Infra`
+
+The expected index families are:
+
+- `siem-gateway-access-*`
+- `siem-waf-access-*`
+- `siem-app-access-*`
+- `siem-syslog-*`
+- `siem-hybrid-*`

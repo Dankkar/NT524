@@ -13,6 +13,7 @@ all:
               wireguard_peer_allowed_ips:
                 - 10.200.0.2/32
                 - "{{ openstack_app_cidr }}"
+                - "{{ openstack_waf_transit_cidr }}"
         openstack_vpn:
           hosts:
             openstack-vpn:

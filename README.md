@@ -1,8 +1,13 @@
 # Hybrid Cloud NAC/WAF/App/DB Lab
 
-Ngay cap nhat: 2026-05-27
+Ngay cap nhat: 2026-05-29
 
 Repo nay trien khai lab hybrid cloud gom AWS va OpenStack, co NAC bang Amazon Cognito, WAF ModSecurity/OWASP CRS o ca hai cloud, app Flask nhe, PostgreSQL centralized tren OpenStack, SIEM/ELK, va Route 53 DNS failover/failback.
+
+Doc lien quan:
+
+- `docs/devsecops-phases.md`: giai thich project tap trung vao stage nao trong DevSecOps, va chi tiet Monitoring, Logging, Detect, Response.
+- `docs/feedback-api.md`: cach dung Feedback API, dataset label flow va export tuned WAF rules.
 
 ## Trang Thai Hien Tai
 
@@ -23,6 +28,9 @@ Da hoan thanh:
 - AWS app va OpenStack app cung chay Lightweight Flask Auth App.
 - PostgreSQL centralized nam tren OpenStack DB node.
 - WireGuard site-to-site VPN giua AWS va OpenStack.
+- SIEM/ELK logging pipeline voi Filebeat tren gateway/WAF/app/VPN nodes.
+- Feedback API cho WAF payload review, dataset label va export tuned ModSecurity rules.
+- Da bo GitHub Actions cu; rule/image update hien duoc van hanh tu controller bang local tooling va Ansible.
 - Test SQLi qua gateway/WAF tra HTTP `403`.
 - Test Route 53 failover/failback thanh cong sau khi them Cognito.
 
@@ -34,27 +42,126 @@ Con can lam:
 
 ## Kien Truc
 
-```text
-Client
-  |
-  v
-app.nt524.io.vn
-Route 53 Failover DNS
-  | primary healthy             | primary failed
-  v                             v
-AWS Gateway                 OpenStack Gateway
-Nginx + oauth2-proxy        Nginx + oauth2-proxy
-  | Cognito login/session        | Cognito login/session
-  v                             v
-AWS WAF                     OpenStack WAF
-Nginx + ModSecurity CRS     Nginx + ModSecurity CRS
-  |                             |
-  v                             v
-AWS Flask App               OpenStack Flask App
-  \                           /
-   \                         /
-    v                       v
-   PostgreSQL centralized on OpenStack
+### Hinh 1 - Kien Truc Tong The
+
+Hinh nay the hien luong logic tong the, khong di sau vao dich vu cu the tren tung node.
+
+```mermaid
+flowchart LR
+    User["User / Browser"]
+    DNS["Public entrypoint<br/>app.nt524.io.vn<br/>Failover DNS"]
+    AAA["AAA module<br/>Login, token issuing"]
+    VPN["Site-to-site VPN<br/>Private inter-cloud link"]
+
+    subgraph AWS["AWS Cloud"]
+        AWS_GW["AWS Access Gateway<br/>Verify session/token"]
+        AWS_WAF["AWS WAF<br/>Security enforcement"]
+        AWS_APP["AWS App Endpoint"]
+    end
+
+    subgraph OS["OpenStack Cloud"]
+        OS_GW["OpenStack Access Gateway<br/>Verify session/token"]
+        OS_WAF["OpenStack WAF<br/>Security enforcement"]
+        OS_APP["OpenStack App Endpoint"]
+        DB["Centralized Database"]
+    end
+
+    subgraph OPS["Security Operations Plane"]
+        SIEM["Monitoring / Logging / Detection"]
+        Feedback["Feedback API<br/>Rule tuning response"]
+    end
+
+    User --> DNS
+    DNS -->|"Primary healthy"| AWS_GW
+    DNS -->|"Primary failed"| OS_GW
+
+    AWS_GW -. "Redirect unauthenticated user" .-> AAA
+    OS_GW -. "Redirect unauthenticated user" .-> AAA
+    AAA -. "Authorization code callback" .-> AWS_GW
+    AAA -. "Authorization code callback" .-> OS_GW
+    AWS_GW <--> VPN <--> OS_GW
+
+    AWS_GW --> AWS_WAF --> AWS_APP --> VPN --> DB
+    OS_GW --> OS_WAF --> OS_APP --> DB
+
+    AWS_GW --> SIEM
+    OS_GW --> SIEM
+    AWS_WAF --> SIEM
+    OS_WAF --> SIEM
+    AWS_APP --> SIEM
+    OS_APP --> SIEM
+    SIEM --> Feedback
+    Feedback --> AWS_WAF
+    Feedback --> OS_WAF
+```
+
+Tom tat control plane va app plane:
+
+- Control plane: `Route 53`, `AAA`, access gateway, WAF, monitoring/logging/detection, feedback/rule response.
+- App plane: AWS app endpoint, OpenStack app endpoint, centralized database.
+
+### Hinh 2 - Kien Truc Trien Khai
+
+Hinh nay anh xa Hinh 1 vao cac node, IP va cong nghe dang chay trong lab.
+
+```mermaid
+flowchart LR
+    User["User / Browser"]
+    R53["Route 53 Failover DNS<br/>app.nt524.io.vn<br/>TTL 30s<br/>Health check /healthz"]
+    Cognito["Amazon Cognito Hosted UI<br/>User Pool: hybrid-auth-users<br/>OIDC authorization code flow"]
+
+    subgraph AWS["AWS Cloud"]
+        AWS_GW["aws-gateway<br/>Public IP: 122.248.227.98<br/>Nginx + oauth2-proxy<br/>Self-signed HTTPS"]
+        AWS_WAF["aws-waf<br/>Private IP: 172.31.4.221<br/>Nginx + ModSecurity v3<br/>OWASP CRS + tuned rules"]
+        AWS_APP["aws-app<br/>Private IP: 172.31.8.161<br/>Lightweight Flask Auth App"]
+        AWS_VPN["aws-vpn<br/>Public IP: 54.169.109.49<br/>WireGuard 10.200.0.1"]
+    end
+
+    subgraph OPENSTACK["OpenStack Cloud"]
+        OS_GW["openstack-gateway<br/>Floating IP: 172.10.10.208<br/>Nginx + oauth2-proxy<br/>Also VPN gateway"]
+        OS_WAF["openstack-waf<br/>Transit IP: 10.0.2.10<br/>App-net IP: 10.0.1.254<br/>Nginx + ModSecurity v3<br/>OWASP CRS + tuned rules"]
+        OS_APP["openstack-app<br/>Private IP: 10.0.1.244<br/>Lightweight Flask Auth App"]
+        OS_DB["openstack-db<br/>Private IP: 10.0.1.94<br/>PostgreSQL centralized"]
+        OS_VPN["WireGuard on gateway<br/>Transit IP: 10.0.2.254<br/>WireGuard 10.200.0.2"]
+    end
+
+    subgraph SIEM["Monitoring / SIEM / Response"]
+        Filebeat["Filebeat agents<br/>gateway, WAF, app logs"]
+        Logstash["Logstash<br/>VPN listener 10.0.2.254:5044"]
+        ES["Elasticsearch<br/>172.10.10.1:9200"]
+        Kibana["Kibana dashboards"]
+        Feedback["Feedback API<br/>Review blocked payloads<br/>Update datasets"]
+        ML["ML tuning pipeline<br/>Export RESPONSE-999 rules"]
+    end
+
+    User --> R53
+    R53 -->|"Primary"| AWS_GW
+    R53 -->|"Secondary"| OS_GW
+
+    AWS_GW -. "Unauthenticated redirect" .-> Cognito
+    OS_GW -. "Unauthenticated redirect" .-> Cognito
+    Cognito -. "Callback /oauth2/callback" .-> AWS_GW
+    Cognito -. "Callback /oauth2/callback" .-> OS_GW
+
+    AWS_GW --> AWS_WAF --> AWS_APP
+    OS_GW --> OS_WAF --> OS_APP
+
+    AWS_APP -->|"DATABASE_URL over VPN"| AWS_VPN
+    AWS_VPN <-->|"WireGuard tunnel"| OS_VPN
+    OS_VPN --> OS_WAF
+    AWS_APP --> OS_DB
+    OS_APP --> OS_DB
+
+    AWS_GW --> Filebeat
+    OS_GW --> Filebeat
+    AWS_WAF --> Filebeat
+    OS_WAF --> Filebeat
+    AWS_APP --> Filebeat
+    OS_APP --> Filebeat
+    Filebeat --> Logstash --> ES --> Kibana
+    ES --> Feedback --> ML
+    ML --> AWS_WAF
+    ML --> OS_WAF
 ```
 
 Important traffic rules:
@@ -64,6 +171,7 @@ Important traffic rules:
 - AWS WAF khong con public EIP; chi nhan traffic tu AWS gateway/private network.
 - OpenStack public entrypoint hien dung `vpn-gateway` kiem gateway proxy.
 - `/healthz` tren gateway de public de Route 53 health check khong bi redirect login.
+- AWS route table hien route ca `10.0.1.0/24` va `10.0.2.0/24` qua AWS VPN ENI de app DB traffic va Filebeat/Logstash traffic deu di duoc qua VPN.
 
 ## Dia Chi Hien Tai
 
@@ -142,6 +250,8 @@ ansible/roles/nginx_waf     Nginx/ModSecurity/CRS WAF role
 ansible/roles/simple_auth_app Flask app role
 ansible/roles/postgresql_centralized PostgreSQL role
 elk/                        Local ELK/SIEM stack
+docs/devsecops-phases.md    DevSecOps phase mapping va Monitoring/Logging/Detect/Response
+docs/feedback-api.md        Feedback API va ML/WAF tuning workflow
 docs/task.md                Detailed task log and latest operational notes
 docs/1.md                   Architecture/design plan
 ```
@@ -216,6 +326,8 @@ ansible/inventories/production/group_vars/all.yml
 
 ### Build/Push WAF Image
 
+GitHub Actions workflow cu da bi go bo vi khong con phu hop topology hien tai: workflow chi deploy AWS WAF, dung path/template cu va GitHub runner khong reach duoc OpenStack WAF/private path. Hien tai build/push image chi can lam khi thay doi Dockerfile/base WAF image; sau do deploy bang Ansible.
+
 ```bash
 aws ecr get-login-password --region ap-southeast-1 \
   | docker login --username AWS --password-stdin 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com
@@ -227,6 +339,26 @@ docker build --network=host \
 
 docker push 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest
 ```
+
+Neu chi retrain/export ModSecurity rule tu Feedback API/ML thi khong can build lai image ECR. Chi cap nhat file rule va reload WAF bang Ansible:
+
+```bash
+cd /home/deployer/Downloads/Project/modsec-learn
+~/modsec-ai-venv/bin/python ../scripts/run_training.py
+~/modsec-ai-venv/bin/python ../scripts/export_tuned_rules.py \
+  --model linear_svc_pl4_l1.joblib \
+  --threshold 1e-5
+
+cd /home/deployer/Downloads/Project
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
+ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
+/home/deployer/kolla-venv/bin/ansible-playbook \
+  -i ansible/inventories/production/hosts.yml \
+  ansible/waf.yml \
+  --tags update_rules
+```
+
+Lenh `--tags update_rules` copy `RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf` len ca AWS WAF va OpenStack WAF, sau do reload Nginx trong container WAF.
 
 ### Ansible
 
@@ -346,6 +478,44 @@ python3 kibana/provision_kibana.py
 ```
 
 Logging hien dung Filebeat -> Logstash -> Elasticsearch -> Kibana. Dashboard can tiep tuc mo rong de phan biet ingress, east-west, failover va failback.
+
+Logstash listener:
+
+```text
+openstack-vpn 10.0.2.254:5044
+```
+
+Filebeat hien thu log tu:
+
+- Gateway nodes: Nginx gateway access/error log va syslog.
+- WAF nodes: Docker/Nginx/ModSecurity log va syslog.
+- App nodes: Docker app log va syslog.
+- VPN nodes: syslog/WireGuard/system events.
+
+Dashboard duoc provision boi `elk/kibana/provision_kibana.py`:
+
+- `SIEM Hybrid Overview`: tong quan log volume theo thoi gian, host va role.
+- `Service Health - Load & Error Monitoring`: monitoring request throughput, 5xx, syslog high severity va log volume.
+- `WAF Security - Attack & False Positive Review`: detect WAF block/403, top IP/path va detail cho feedback.
+- `Response Operations - WAF/Auth/Infra`: response queue cho WAF block, 5xx, auth/gateway/VPN/syslog events.
+
+Mapping chi tiet giua Monitoring, Logging, Detect va Response nam trong:
+
+```text
+docs/devsecops-phases.md
+```
+
+Feedback API va ML/WAF tuning loop:
+
+```bash
+FEEDBACK_ML_PYTHON=~/modsec-ai-venv/bin/python python3 scripts/feedback_api.py
+```
+
+```text
+Dashboard: http://127.0.0.1:5005/
+Health:    http://127.0.0.1:5005/healthz
+Docs:      docs/feedback-api.md
+```
 
 ## Luu Y Van Hanh
 

@@ -34,3 +34,9 @@ resource "aws_route" "openstack_app_via_vpn" {
   destination_cidr_block = var.openstack_app_cidr
   network_interface_id   = module.compute.vpn_network_interface_id
 }
+
+resource "aws_route" "openstack_waf_transit_via_vpn" {
+  route_table_id         = module.network.route_table_id
+  destination_cidr_block = var.openstack_waf_transit_cidr
+  network_interface_id   = module.compute.vpn_network_interface_id
+}

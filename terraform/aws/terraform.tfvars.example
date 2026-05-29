@@ -17,6 +17,9 @@ route_table_id = "rtb-CHANGE_ME"
 # OpenStack App subnet routed through WireGuard.
 openstack_app_cidr = "10.0.1.0/24"
 
+# OpenStack WAF/VPN transit subnet routed through WireGuard.
+openstack_waf_transit_cidr = "10.0.2.0/24"
+
 # Real WAN/NAT public IP of the laptop/OpenStack AIO host as seen from the Internet.
 # Do not use the OpenStack floating IP 172.10.10.x here.
 # Example: openstack_vpn_public_cidr = "203.0.113.10/32"

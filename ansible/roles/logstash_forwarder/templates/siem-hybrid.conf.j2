@@ -123,6 +123,42 @@ filter {
     mutate { add_field => { "log_source_index" => "siem-app-access" } }
   }
 
+  # ─── Gateway node: public Nginx access/error logs and OAuth callback path ───
+  else if [fields][node_role] == "gateway" and [fields][log_type] == "gateway_nginx" {
+    grok {
+      match => {
+        "message" => [
+          "%{IPORHOST:client_ip} - %{DATA:remote_user} \[%{HTTPDATE:time_local}\] \"%{WORD:http_method} %{URIPATHPARAM:request_path} HTTP/%{NUMBER:http_version}\" %{NUMBER:status_code:int} %{NUMBER:bytes_sent:int} \"%{DATA:http_referer}\" \"%{DATA:user_agent}\"",
+          "%{YEAR}/%{MONTHNUM}/%{MONTHDAY} %{TIME} \[%{LOGLEVEL:log_level}\] %{GREEDYDATA:error_detail}"
+        ]
+      }
+      tag_on_failure => ["_gateway_grok_failure"]
+    }
+
+    if [time_local] {
+      date {
+        match  => [ "time_local", "dd/MMM/yyyy:HH:mm:ss Z" ]
+        target => "@timestamp"
+        remove_field => ["time_local"]
+      }
+    }
+
+    if [request_path] =~ /^\/oauth2\// {
+      mutate { add_tag => ["auth_flow"] }
+    }
+    if [status_code] == 401 or [status_code] == 403 {
+      mutate { add_tag => ["auth_denied"] }
+    }
+    if [status_code] and [status_code] >= 500 {
+      mutate { add_tag => ["server_error"] }
+    }
+    if [log_level] {
+      mutate { add_tag => ["gateway_error_log"] }
+    }
+
+    mutate { add_field => { "log_source_index" => "siem-gateway-access" } }
+  }
+
   # ─── Syslog ─────────────────────────────────────────────────────────────────
   else if [fields][log_type] == "syslog" {
     grok {
@@ -166,6 +202,11 @@ output {
     elasticsearch {
       hosts => ["http://{{ elasticsearch_host }}:{{ elasticsearch_port }}"]
       index => "siem-app-access-%{+YYYY.MM.dd}"
+    }
+  } else if [log_source_index] == "siem-gateway-access" {
+    elasticsearch {
+      hosts => ["http://{{ elasticsearch_host }}:{{ elasticsearch_port }}"]
+      index => "siem-gateway-access-%{+YYYY.MM.dd}"
     }
   } else if [log_source_index] == "siem-syslog" {
     elasticsearch {

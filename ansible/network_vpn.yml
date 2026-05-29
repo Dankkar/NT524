@@ -3,5 +3,9 @@
   hosts: vpn_gateways
   become: true
   gather_facts: true
+  vars:
+    filebeat_node_role: vpn
+    filebeat_inputs: "{{ filebeat_vpn_inputs }}"
   roles:
     - wireguard_gateway
+    - filebeat_agent
