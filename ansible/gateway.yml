@@ -3,5 +3,9 @@
   hosts: gateway_nodes
   become: true
   gather_facts: true
+  vars:
+    filebeat_node_role: gateway
+    filebeat_inputs: "{{ filebeat_gateway_inputs }}"
   roles:
     - gateway_proxy
+    - filebeat_agent

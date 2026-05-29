@@ -10,6 +10,7 @@ KIBANA_URL = "http://127.0.0.1:5601"
 # Index patterns
 IDX_WAF    = "siem-waf-access-*"
 IDX_APP    = "siem-app-access-*"
+IDX_GATEWAY = "siem-gateway-access-*"
 IDX_SYSLOG = "siem-syslog-*"
 IDX_ALL    = "siem-*"
 
@@ -51,6 +52,7 @@ def create_data_views():
         ("siem-all-data-view",    IDX_ALL,    "SIEM – All Logs"),
         ("siem-waf-data-view",    IDX_WAF,    "SIEM – WAF Access"),
         ("siem-app-data-view",    IDX_APP,    "SIEM – App Access"),
+        ("siem-gateway-data-view", IDX_GATEWAY, "SIEM – Gateway Access"),
         ("siem-syslog-data-view", IDX_SYSLOG, "SIEM – Syslog"),
     ]
     for dv_id, pattern, name in views:
@@ -390,6 +392,156 @@ def create_health_dashboard():
     print("  dashboard: Service Health – Load & Error Monitoring")
 
 
+# ─── Response dashboard ───────────────────────────────────────────────────────
+
+def response_query():
+    return {
+        "bool": {
+            "should": [
+                {"term": {"status_code": 403}},
+                {"range": {"status_code": {"gte": 500}}},
+                {"term": {"tags": "waf_blocked"}},
+                {"term": {"tags": "auth_denied"}},
+                {"term": {"tags": "server_error"}},
+                {"term": {"tags": "syslog_high_severity"}},
+                {"match_phrase": {"message": "wg0"}},
+                {"match_phrase": {"message": "wireguard"}},
+                {"match_phrase": {"message": "oauth2-proxy"}},
+            ],
+            "minimum_should_match": 1,
+        }
+    }
+
+
+def create_response_dashboard():
+    q_response = response_query()
+    q_auth = {
+        "bool": {
+            "should": [
+                {"term": {"tags": "auth_flow"}},
+                {"term": {"tags": "auth_denied"}},
+                {"prefix": {"request_path.keyword": "/oauth2/"}},
+            ],
+            "minimum_should_match": 1,
+        }
+    }
+    q_vpn_or_infra = {
+        "bool": {
+            "should": [
+                {"term": {"tags": "syslog_high_severity"}},
+                {"match_phrase": {"message": "wg0"}},
+                {"match_phrase": {"message": "wireguard"}},
+                {"match_phrase": {"message": "nginx"}},
+                {"match_phrase": {"message": "filebeat"}},
+                {"match_phrase": {"message": "logstash"}},
+            ],
+            "minimum_should_match": 1,
+        }
+    }
+
+    vis_objects = {
+        "response-events-over-time": (
+            "Response – Events Requiring Action",
+            bar_over_time(IDX_ALL, "Response Events over Time", q_response),
+        ),
+        "response-top-hosts": (
+            "Response – Top Hosts",
+            top_terms_bar(IDX_ALL, "host.name.keyword", "Top Hosts with Response Events", extra_query=q_response),
+        ),
+        "response-auth-events": (
+            "Response – Auth/Gateway Events",
+            bar_over_time(IDX_GATEWAY, "Auth and Gateway Events", q_auth),
+        ),
+        "response-infra-events": (
+            "Response – VPN/SIEM/System Events",
+            bar_over_time(IDX_SYSLOG, "VPN, SIEM and High-Severity System Events", q_vpn_or_infra),
+        ),
+        "response-waf-rules": (
+            "Response – Top WAF Rule IDs",
+            top_terms_bar(IDX_WAF, "modsec_rule_id.keyword", "Top WAF Rules for Review", extra_query={"term": {"tags": "waf_blocked"}}),
+        ),
+    }
+
+    for vis_id, (title, spec) in vis_objects.items():
+        put_saved_object("visualization", vis_id, vega_vis(title, spec))
+
+    search_attrs = {
+        "title": "Response – Review Queue",
+        "description": "Events that should trigger an operator response: WAF blocks, 5xx, auth denial, VPN/SIEM/system errors.",
+        "hits": 0,
+        "columns": [
+            "@timestamp", "host.name", "fields.node_role", "status_code",
+            "client_ip", "http_method", "request_path", "tags", "message",
+        ],
+        "sort": [["@timestamp", "desc"]],
+        "version": 1,
+        "kibanaSavedObjectMeta": {
+            "searchSourceJSON": json.dumps({
+                "index": "siem-all-data-view",
+                "filter": [],
+                "query": {
+                    "query": "status_code:403 or status_code >= 500 or tags:(waf_blocked or auth_denied or server_error or syslog_high_severity) or message:(wg0 or wireguard or oauth2-proxy)",
+                    "language": "kuery",
+                },
+            })
+        },
+    }
+    put_saved_object("search", "response-review-queue-search", search_attrs,
+                     references=[{"name": "kibanaSavedObjectMeta.searchSourceJSON.index",
+                                  "type": "index-pattern", "id": "siem-all-data-view"}])
+
+    panel_ids = [
+        ("response-events-over-time", 0, 0, 48, 12),
+        ("response-auth-events", 0, 12, 24, 12),
+        ("response-infra-events", 24, 12, 24, 12),
+        ("response-top-hosts", 0, 24, 24, 14),
+        ("response-waf-rules", 24, 24, 24, 14),
+    ]
+
+    panels = []
+    references = []
+    for idx, (vis_id, x, y, w, h) in enumerate(panel_ids, 1):
+        i = str(idx)
+        panels.append({
+            "version": "8.13.0",
+            "gridData": {"x": x, "y": y, "w": w, "h": h, "i": i},
+            "panelIndex": i,
+            "embeddableConfig": {},
+            "panelRefName": f"panel_{i}",
+        })
+        references.append({"name": f"panel_{i}", "type": "visualization", "id": vis_id})
+
+    panels.append({
+        "version": "8.13.0",
+        "gridData": {"x": 0, "y": 38, "w": 48, "h": 16, "i": "6"},
+        "panelIndex": "6",
+        "embeddableConfig": {"columns": ["@timestamp", "host.name", "fields.node_role",
+                                         "status_code", "client_ip", "request_path",
+                                         "tags", "message"]},
+        "panelRefName": "panel_6",
+    })
+    references.append({"name": "panel_6", "type": "search", "id": "response-review-queue-search"})
+
+    put_saved_object(
+        "dashboard", "siem-response-operations",
+        {
+            "title": "Response Operations – WAF/Auth/Infra",
+            "description": (
+                "Operational response queue for WAF blocks, auth/gateway problems, 5xx errors, "
+                "VPN events, and SIEM pipeline health issues."
+            ),
+            "panelsJSON": json.dumps(panels),
+            "optionsJSON": json.dumps({"useMargins": True, "hidePanelTitles": False}),
+            "timeRestore": False,
+            "kibanaSavedObjectMeta": {
+                "searchSourceJSON": json.dumps({"query": {"query": "", "language": "kuery"}, "filter": []})
+            },
+        },
+        references,
+    )
+    print("  dashboard: Response Operations – WAF/Auth/Infra")
+
+
 # ─── Legacy overview dashboard (keep) ────────────────────────────────────────
 
 def create_overview_dashboard():
@@ -558,6 +710,9 @@ def main():
     print("Creating service health dashboard...")
     create_health_dashboard()
 
+    print("Creating response operations dashboard...")
+    create_response_dashboard()
+
     print("Creating overview dashboard...")
     create_overview_dashboard()
 
@@ -567,6 +722,7 @@ def main():
     print("\nDone.")
     print(f"  WAF dashboard:    {KIBANA_URL}/app/dashboards#/view/siem-waf-security")
     print(f"  Health dashboard: {KIBANA_URL}/app/dashboards#/view/siem-service-health")
+    print(f"  Response:         {KIBANA_URL}/app/dashboards#/view/siem-response-operations")
     print(f"  Overview:         {KIBANA_URL}/app/dashboards#/view/siem-hybrid-overview")
 
 

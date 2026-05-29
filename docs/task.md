@@ -1,6 +1,6 @@
 # Task Log - Hybrid Cloud NAC/WAF/App/DB
 
-Ngay cap nhat: 2026-05-27
+Ngay cap nhat: 2026-05-29
 
 ## Cap nhat 2026-05-27 - Domain nt524.io.vn
 
@@ -18,7 +18,7 @@ Ngay cap nhat: 2026-05-27
   - `ns-916.awsdns-50.net`
 - Test authoritative DNS:
   - `dig +short @ns-1270.awsdns-30.org app.nt524.io.vn A`: `122.248.227.98`
-- Public resolver hien tai van tra `125.235.4.59`, nen can delegate nameserver cua `nt524.io.vn` sang Route 53 hoac cho DNS cache het han.
+- Tai thoi diem moi doi domain, public resolver con cache/tra `125.235.4.59`. Hien tai domain da duoc delegate sang Route 53 va authoritative DNS tra dung `app.nt524.io.vn`.
 
 ## Cap nhat 2026-05-27 - Cognito / oauth2-proxy
 
@@ -239,7 +239,7 @@ Ngay cap nhat: 2026-05-27
 - Trien khai topology OpenStack dung yeu cau: `VPN Gateway -> WAF -> App/DB`.
 - Tao DB node rieng tren OpenStack thay vi chay database chung instance voi app.
 - Thay NodeGoat bang web app nhe co login va database centralized.
-- Chua lam Cognito trong ngay nay; app duoc thiet ke san de nhan identity headers tu oauth2-proxy/Cognito sau nay.
+- Tai thoi diem 2026-05-26 chua lam Cognito; den cap nhat 2026-05-27 da hoan thanh Cognito Hosted UI + `oauth2-proxy`.
 
 ## Da xong
 
@@ -303,16 +303,19 @@ Ngay cap nhat: 2026-05-27
   - DB co user count = `1`.
   - WAF node reach duoc app health qua `http://10.0.1.244/healthz`.
 
-## Dang do / Chua xong
+## Trang thai da cap nhat
 
 ### Cognito / NAC
 
-- Chua lam Cognito/oauth2-proxy.
-- App moi da san sang nhan identity headers tu gateway/oauth2-proxy.
-- Buoc sau:
-  - them controller/oauth2-proxy,
-  - cau hinh Cognito Hosted UI,
-  - forward identity headers xuong WAF/app.
+- Da hoan thanh Cognito Hosted UI + `oauth2-proxy` + Nginx `auth_request` tren ca AWS gateway va OpenStack gateway.
+- App nhan identity tu gateway qua cac header:
+  - `X-Auth-Request-Email`
+  - `X-Auth-Request-User`
+  - `X-Auth-Request-Preferred-Username`
+- Callback dang dung:
+  - `https://app.nt524.io.vn/oauth2/callback`
+- Demo user dang dung:
+  - `demo@nt524.io.vn`
 
 ### Terraform security group cho WAF egress qua VPN
 
@@ -333,15 +336,18 @@ Ngay cap nhat: 2026-05-27
   - Dung image ECR moi: `211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest`
 - Da test health va SQLi block 403 tren ca hai WAF.
 
-## Viec can lam tiep ngay mai
+## Viec con lai
 
 1. Thay self-signed gateway TLS cert bang Let's Encrypt/public TLS cert.
-2. Delegate nameserver cua `nt524.io.vn` sang 4 Route 53 nameserver moi de public DNS tra `app.nt524.io.vn`.
-3. Bo sung health endpoint cho gateway/controller neu can tach khoi `/healthz` cua app.
-4. Giam rui ro WAN IP thay doi:
+2. Bo sung health endpoint rieng neu muon tach gateway health khoi app `/healthz`.
+3. Giam rui ro WAN IP thay doi:
    - cap nhat lai `openstack_vpn_public_cidr` moi khi public IP laptop/OpenStack AIO doi,
    - hoac mo WireGuard UDP `51820` rong hon trong lab,
    - hoac dung public IP/static NAT that cho OpenStack side.
+4. Cai tien DB availability neu muon AWS van chay khi OpenStack tat:
+   - chuyen DB chinh sang AWS/RDS,
+   - hoac them DB replica/standby o AWS,
+   - hoac moi cloud co DB rieng va dong bo async.
 
 ## Ghi chu quan trong
 
@@ -349,6 +355,92 @@ Ngay cap nhat: 2026-05-27
 - AWS app public HTTP bi chan; duong user hop le hien tai la qua AWS gateway `122.248.227.98`.
 - AWS WAF khong con public EIP; chi nhan traffic tu AWS gateway/private network.
 - OpenStack public entrypoint hien tai la `vpn-gateway` kiem gateway proxy `172.10.10.208`.
-- Route 53 failover hien tai da dung hosted zone `nt524.io.vn`; authoritative DNS da tra dung `app.nt524.io.vn`, public DNS con can delegate nameserver/cho cache het han.
+- Route 53 failover hien tai da dung hosted zone `nt524.io.vn`; authoritative DNS tra dung `app.nt524.io.vn`.
 - Neu public WAN IP cua laptop/OpenStack AIO doi, AWS WireGuard SG se chan tunnel cho den khi cap nhat `openstack_vpn_public_cidr`.
 - Neu recreate Terraform, cap nhat lai `hosts.yml` theo output moi.
+
+## Cap nhat 2026-05-29 - DevSecOps docs va SIEM dashboards
+
+- Da them `docs/devsecops-phases.md`.
+  - Mo ta project tap trung vao `Deploy`, `Operate`, `Monitor`, `Detect`, `Response`, `Recover`.
+  - Giai thich ML nam chu yeu o `Detect` va `Response`.
+  - Ghi ro can monitoring/logging/detect/response gi cho DNS, AAA, gateway, WAF, app, DB, VPN va SIEM.
+- Da cap nhat `README.md` link toi tai lieu DevSecOps moi va mo ta dashboard SIEM.
+- Da mo rong Filebeat:
+  - Gateway nodes thu `/var/log/nginx/gateway_access.log`, `/var/log/nginx/gateway_error.log`, syslog.
+  - VPN nodes thu syslog/WireGuard/system events.
+  - WAF/app nodes tiep tuc thu Docker log va syslog.
+- Da mo rong Logstash:
+  - Them parser/index `siem-gateway-access-*` cho gateway/auth flow.
+  - Tiep tuc co `siem-waf-access-*`, `siem-app-access-*`, `siem-syslog-*`.
+- Da mo rong Kibana provisioning:
+  - `SIEM Hybrid Overview`
+  - `Service Health - Load & Error Monitoring`
+  - `WAF Security - Attack & False Positive Review`
+  - `Response Operations - WAF/Auth/Infra`
+- Da bat lai ELK local:
+  - Elasticsearch `172.10.10.1:9200`
+  - Kibana `127.0.0.1:5601`
+- Da deploy/start lai:
+  - Logstash tren `openstack-vpn`, listen `*:5044`
+  - Filebeat tren gateway/WAF/app/VPN nodes
+- Da fix AWS logging path:
+  - Nguyen nhan: AWS nodes khong reach duoc `10.0.2.254:5044` vi AWS route va WireGuard AllowedIPs chua co `10.0.2.0/24`.
+  - Da them Terraform route `openstack_waf_transit_via_vpn` cho `10.0.2.0/24` qua AWS VPN ENI.
+  - Da them `openstack_waf_transit_cidr = "10.0.2.0/24"`.
+  - Da them `10.0.2.0/24` vao WireGuard `AllowedIPs` cua AWS peer.
+  - Da apply Terraform AWS va re-apply `ansible/network_vpn.yml`.
+- Da verify:
+  - AWS/OpenStack gateway `/healthz` deu OK.
+  - AWS/OpenStack app `/healthz` deu OK.
+  - AWS/OpenStack app deu TCP OK toi PostgreSQL `10.0.1.94:5432`.
+  - AWS nodes TCP OK toi Logstash `10.0.2.254:5044`.
+  - Elasticsearch co log tu role `vpn`, `gateway`, `waf`, `app`.
+  - WAF SQLi test tra `403` va vao `siem-waf-access-*`.
+
+## Cap nhat 2026-05-29 - Feedback API
+
+- Da refactor `scripts/feedback_api.py` de hoan thien feedback loop:
+  - Dashboard HTML tai `/`.
+  - Health endpoint `/healthz`.
+  - JSON endpoint `/api/blocked` lay blocked payload tu Elasticsearch.
+  - JSON endpoint `/api/dataset/status` xem dataset count/conflict.
+  - JSON endpoint `POST /api/feedback` label payload `legitimate` hoac `malicious`.
+  - Backward-compatible endpoint `/feedback` cho flow cu.
+  - JSON endpoint `POST /api/export-rules` export tuned ModSecurity rules tu model da train.
+- Feedback API hien ghi dataset vao ca:
+  - `data/dataset/`
+  - `modsec-learn/data/dataset/`
+- Da them audit trail:
+  - `data/feedback/feedback_audit.jsonl`
+- Da them `docs/feedback-api.md` mo ta cach chay API, endpoint, dataset path va workflow train/export/deploy WAF rules.
+- Da fix cac diem yeu cua API cu:
+  - khong con render payload raw vao HTML,
+  - co JSON API cho dashboard/automation,
+  - label conflict se xoa payload khoi class doi lap,
+  - ghi file dataset bang atomic write,
+  - co status endpoint de kiem tra dataset.
+
+## Cap nhat 2026-05-29 - Bo GitHub Actions
+
+- Da bo `.github/workflows/deploy.yml`.
+- Da go bo Terraform IAM role/policy attachment rieng cho GitHub Actions OIDC:
+  - `aws_iam_role.github_actions`
+  - `aws_iam_role_policy_attachment.github_actions_ecr`
+  - output `github_actions_role_arn`
+  - variable `github_repository`
+- Da apply Terraform AWS thanh cong:
+  - `0 added, 0 changed, 2 destroyed`
+  - `terraform plan` sau apply: `No changes`
+- Van giu lai:
+  - ECR repo `my-waf-nginx`
+  - IAM instance profile `waf-ec2-ecr-pull-role` cho WAF EC2 pull image tu ECR.
+- Ly do bo workflow:
+  - workflow cu chi deploy AWS WAF, khong cap nhat OpenStack WAF,
+  - dung path/template cu `juice_shop_proxy.conf`,
+  - deploy bang `docker compose` trong khi Ansible hien dung `docker run --network host`,
+  - GitHub hosted runner khong phu hop de reach cac endpoint private/OpenStack/VPN trong topology hien tai.
+- Huong van hanh hien tai:
+  - Neu chi feedback/retrain/export rule: dung `~/modsec-ai-venv/bin/python` de train/export, sau do chay `ansible/waf.yml --tags update_rules`.
+  - Neu thay Dockerfile/base WAF image: build/push ECR thu cong, sau do chay full `ansible/waf.yml`.
+  - Terraform AWS da xoa tai nguyen GitHub Actions cu, khong xoa ECR repo/WAF EC2 pull role.

@@ -40,6 +40,12 @@ variable "openstack_app_cidr" {
   default     = "10.0.1.0/24"
 }
 
+variable "openstack_waf_transit_cidr" {
+  type        = string
+  description = "OpenStack WAF/VPN transit network routed through the AWS VPN gateway for Logstash and WAF transit access."
+  default     = "10.0.2.0/24"
+}
+
 variable "openstack_vpn_public_cidr" {
   type        = string
   description = "Real public source CIDR allowed to access AWS WireGuard. For laptop OpenStack AIO, this is the WAN/NAT public IP as x.x.x.x/32, not the 172.10.10.x floating IP."
@@ -90,12 +96,6 @@ variable "gateway_node_name" {
   type        = string
   description = "Name tag for the AWS public gateway node"
   default     = "aws-gateway-node"
-}
-
-variable "github_repository" {
-  type        = string
-  description = "GitHub repository path (e.g. your-username/your-repo-name) allowed to assume the ECR push role"
-  default     = "Dankkar/NT524"
 }
 
 variable "route53_failover_enabled" {

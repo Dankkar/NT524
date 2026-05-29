@@ -106,3 +106,26 @@ filebeat_app_inputs:
     fields:
       log_type: syslog
       node_role: app
+
+filebeat_gateway_inputs:
+  - id: gateway-nginx
+    paths:
+      - /var/log/nginx/gateway_access.log
+      - /var/log/nginx/gateway_error.log
+    fields:
+      log_type: gateway_nginx
+      node_role: gateway
+  - id: syslog
+    paths:
+      - /var/log/syslog
+    fields:
+      log_type: syslog
+      node_role: gateway
+
+filebeat_vpn_inputs:
+  - id: syslog
+    paths:
+      - /var/log/syslog
+    fields:
+      log_type: syslog
+      node_role: vpn
