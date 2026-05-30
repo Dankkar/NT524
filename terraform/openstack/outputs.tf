@@ -12,8 +12,3 @@ output "waf_node_ip" {
   value       = module.compute.waf_node_private_ip
   description = "Private IP of the OpenStack WAF Node"
 }
-
-output "db_node_ip" {
-  value       = module.compute.db_node_private_ip
-  description = "Private IP of the OpenStack centralized Database Node"
-}

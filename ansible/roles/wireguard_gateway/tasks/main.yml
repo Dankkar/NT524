@@ -130,6 +130,42 @@
   ansible.builtin.command: "iptables -A FORWARD -o {{ wireguard_interface }} -j ACCEPT"
   when: forward_out_check.rc == 1
 
+- name: Check TCP MSS clamp into WireGuard
+  ansible.builtin.command: >-
+    iptables -t mangle -C FORWARD
+    -o {{ wireguard_interface }}
+    -p tcp --tcp-flags SYN,RST SYN
+    -j TCPMSS --clamp-mss-to-pmtu
+  register: wireguard_mss_out_check
+  changed_when: false
+  failed_when: wireguard_mss_out_check.rc not in [0, 1]
+
+- name: Add TCP MSS clamp into WireGuard
+  ansible.builtin.command: >-
+    iptables -t mangle -A FORWARD
+    -o {{ wireguard_interface }}
+    -p tcp --tcp-flags SYN,RST SYN
+    -j TCPMSS --clamp-mss-to-pmtu
+  when: wireguard_mss_out_check.rc == 1
+
+- name: Check TCP MSS clamp out of WireGuard
+  ansible.builtin.command: >-
+    iptables -t mangle -C FORWARD
+    -i {{ wireguard_interface }}
+    -p tcp --tcp-flags SYN,RST SYN
+    -j TCPMSS --clamp-mss-to-pmtu
+  register: wireguard_mss_in_check
+  changed_when: false
+  failed_when: wireguard_mss_in_check.rc not in [0, 1]
+
+- name: Add TCP MSS clamp out of WireGuard
+  ansible.builtin.command: >-
+    iptables -t mangle -A FORWARD
+    -i {{ wireguard_interface }}
+    -p tcp --tcp-flags SYN,RST SYN
+    -j TCPMSS --clamp-mss-to-pmtu
+  when: wireguard_mss_in_check.rc == 1
+
 - name: Detect OpenStack app-side interface
   ansible.builtin.shell: "ip -o -4 addr show to {{ openstack_vpn_app_ip }} | awk '{print $2; exit}'"
   args:

@@ -18,6 +18,16 @@ output "app_private_ip" {
   value = module.compute.app_private_ip
 }
 
+output "db_private_ip" {
+  value       = module.compute.db_private_ip
+  description = "Private IP of the dedicated AWS PostgreSQL primary DB node."
+}
+
+output "db_instance_id" {
+  value       = module.compute.db_instance_id
+  description = "Instance ID of the dedicated AWS PostgreSQL primary DB node."
+}
+
 output "vpn_private_ip" {
   value = module.compute.vpn_private_ip
 }
@@ -74,4 +84,14 @@ output "cognito_issuer_url" {
 output "cognito_hosted_ui_base_url" {
   value       = var.cognito_enabled ? "https://${aws_cognito_user_pool_domain.hosted_ui[0].domain}.auth.${var.aws_region}.amazoncognito.com" : null
   description = "Cognito hosted UI base URL."
+}
+
+output "terraform_state_bucket_name" {
+  value       = var.terraform_state_backend_enabled ? aws_s3_bucket.terraform_state[0].bucket : null
+  description = "S3 bucket prepared for shared Terraform remote state."
+}
+
+output "terraform_lock_table_name" {
+  value       = var.terraform_state_backend_enabled ? aws_dynamodb_table.terraform_locks[0].name : null
+  description = "DynamoDB table prepared for Terraform state locking."
 }

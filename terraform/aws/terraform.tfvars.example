@@ -28,6 +28,10 @@ openstack_vpn_public_cidr = "CHANGE_ME_PUBLIC_WAN_IP/32"
 # Public key imported to AWS as the EC2 key pair named aws_vpn_key.
 public_key_path = "~/.ssh/aws_vpn_key.pub"
 
+# Optional Name tags for EC2 nodes.
+db_instance_type = "t2.nano"
+db_node_name = "aws-db-node"
+
 # Optional lab Route 53 failover DNS.
 route53_failover_enabled      = false
 route53_create_hosted_zone    = true

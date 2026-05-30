@@ -17,6 +17,10 @@ data "aws_ami" "ubuntu" {
 resource "aws_key_pair" "vpn_key" {
   key_name   = var.keypair_name
   public_key = file(var.public_key_path)
+
+  lifecycle {
+    ignore_changes = [public_key]
+  }
 }
 
 resource "aws_instance" "vpn_gateway" {
@@ -113,6 +117,26 @@ resource "aws_instance" "app_node" {
   }
 
   depends_on = [aws_instance.vpn_gateway, aws_instance.waf_node]
+}
+
+resource "aws_instance" "db_node" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = var.db_instance_type
+  subnet_id     = var.subnet_id
+  key_name      = aws_key_pair.vpn_key.key_name
+
+  vpc_security_group_ids = [var.db_sg_id]
+
+  user_data = <<-EOF
+              #!/bin/bash
+              # PostgreSQL primary will be provisioned by Ansible.
+              EOF
+
+  tags = {
+    Name = var.db_node_name
+  }
+
+  depends_on = [aws_instance.vpn_gateway]
 }
 
 resource "aws_eip" "vpn_eip" {

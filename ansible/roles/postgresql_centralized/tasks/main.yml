@@ -48,9 +48,9 @@
   ansible.builtin.file:
     path: "{{ postgres_data_dir }}"
     state: directory
-    owner: root
-    group: root
-    mode: "0750"
+    owner: "70"
+    group: "70"
+    mode: "0700"
 
 - name: Pull PostgreSQL image
   ansible.builtin.command: "docker pull {{ postgres_image }}"
@@ -81,7 +81,7 @@
 - name: Ensure PostgreSQL container is running
   ansible.builtin.command: "docker start {{ postgres_container_name }}"
   register: postgres_start
-  changed_when: "'{{ postgres_container_name }}' in postgres_start.stdout"
+  changed_when: postgres_container_name in postgres_start.stdout
   when: postgres_inspect.rc == 0
 
 - name: Wait for PostgreSQL to accept connections
@@ -92,4 +92,28 @@
   retries: 30
   delay: 2
   until: postgres_ready.rc == 0
+  changed_when: false
+
+- name: Configure PostgreSQL client access
+  ansible.builtin.shell: |
+    set -euo pipefail
+    docker exec {{ postgres_container_name }} psql -U {{ postgres_username }} -d {{ postgres_database }} -v ON_ERROR_STOP=1 <<'SQL'
+    alter system set listen_addresses = '*';
+    SQL
+    {% for cidr in postgres_allowed_cidrs | default([aws_vpc_cidr, openstack_app_cidr, openstack_waf_transit_cidr, wireguard_cidr]) %}
+    docker exec {{ postgres_container_name }} sh -c "grep -Fq 'host all {{ postgres_username }} {{ cidr }} scram-sha-256' /var/lib/postgresql/data/pg_hba.conf || echo 'host all {{ postgres_username }} {{ cidr }} scram-sha-256' >> /var/lib/postgresql/data/pg_hba.conf"
+    {% endfor %}
+    docker restart {{ postgres_container_name }} >/dev/null
+  args:
+    executable: /bin/bash
+  no_log: true
+
+- name: Wait for PostgreSQL after access reload
+  ansible.builtin.command: >-
+    docker exec {{ postgres_container_name }}
+    pg_isready -U {{ postgres_username }} -d {{ postgres_database }}
+  register: postgres_access_ready
+  retries: 30
+  delay: 2
+  until: postgres_access_ready.rc == 0
   changed_when: false

@@ -1,9 +1,12 @@
 ---
 aws_vpc_cidr: 172.31.0.0/16
+aws_db_private_ip: 172.31.3.61
+openstack_app_private_ip: 10.0.1.214
 openstack_app_cidr: 10.0.1.0/24
 openstack_vpn_app_ip: 10.0.2.254
 openstack_waf_transit_cidr: 10.0.2.0/24
 openstack_waf_transit_ip: 10.0.2.10
+openstack_app_gateway_ip: 10.0.1.254
 wireguard_cidr: 10.200.0.0/24
 
 wireguard_interface: wg0
@@ -25,8 +28,18 @@ openstack_waf_app_nat_source_cidrs:
   - "{{ openstack_waf_transit_cidr }}"
   - "{{ aws_vpc_cidr }}"
   - "{{ wireguard_cidr }}"
+openstack_waf_app_egress_cidrs:
+  - "{{ aws_vpc_cidr }}"
+  - "{{ wireguard_cidr }}"
+openstack_db_flow_logging_enabled: true
+openstack_db_flow_source_cidr: "{{ openstack_app_private_ip }}/32"
+openstack_db_flow_destination_ip: "{{ aws_db_private_ip }}"
+openstack_db_flow_destination_port: "{{ postgres_port }}"
+openstack_db_flow_log_path: /var/log/openstack-db-flow.log
+openstack_db_flow_log_prefix: "OPENSTACK_APP_TO_AWS_DB "
+openstack_db_response_flow_log_prefix: "AWS_DB_TO_OPENSTACK_APP "
 
-app_backend_host: 10.0.1.244
+app_backend_host: 10.0.1.214
 app_backend_port: 80
 
 hybrid_app_image: hybrid-auth-app:local
@@ -37,6 +50,7 @@ hybrid_app_base_dir: /opt/hybrid-auth-app
 hybrid_app_session_secret: change-this-lab-secret
 hybrid_app_dev_login_enabled: true
 hybrid_app_trust_proxy_headers: true
+hybrid_app_logout_url: "/oauth2/sign_out?rd=https%3A%2F%2Fnt524-hybrid-auth-211116632423.auth.ap-southeast-1.amazoncognito.com%2Flogout%3Fclient_id%3D4gn2j0lo07rori6u3snjj6lr4p%26logout_uri%3Dhttps%253A%252F%252Fapp.nt524.io.vn%252F"
 
 gateway_server_name: app.nt524.io.vn
 gateway_auth_enabled: true
@@ -51,18 +65,27 @@ oauth2_proxy_client_id: "4gn2j0lo07rori6u3snjj6lr4p"
 oauth2_proxy_client_secret: "1ulg73tl3arj5j5gp5ds8tnaolf2ne2is1grf0ek21ajrr8392vr"
 oauth2_proxy_oidc_issuer_url: "https://cognito-idp.ap-southeast-1.amazonaws.com/ap-southeast-1_Xg1Q3ZUP9"
 oauth2_proxy_cookie_domain: ".nt524.io.vn"
+oauth2_proxy_whitelist_domains:
+  - ".nt524.io.vn"
+  - "nt524-hybrid-auth-211116632423.auth.ap-southeast-1.amazoncognito.com"
 oauth2_proxy_email_domains:
   - "*"
 
 postgres_image: postgres:16-alpine
 postgres_container_name: hybrid-auth-postgres
-postgres_host: 10.0.1.94
+postgres_host: "{{ aws_db_private_ip }}"
 postgres_port: 5432
 postgres_database: hybrid_auth
 postgres_username: hybrid_auth
 postgres_password: hybrid_auth_lab_password
 postgres_data_dir: /opt/hybrid-auth/postgres/data
-hybrid_app_database_url: "postgresql://{{ postgres_username }}:{{ postgres_password }}@{{ postgres_host }}:{{ postgres_port }}/{{ postgres_database }}"
+postgres_allowed_cidrs:
+  - "{{ aws_vpc_cidr }}"
+  - "{{ openstack_app_cidr }}"
+  - "{{ openstack_waf_transit_cidr }}"
+  - "{{ wireguard_cidr }}"
+hybrid_app_primary_database_url: "postgresql://{{ postgres_username }}:{{ postgres_password }}@{{ aws_db_private_ip }}:{{ postgres_port }}/{{ postgres_database }}"
+hybrid_app_database_url: "{{ hybrid_app_primary_database_url }}"
 
 nginx_server_name: _
 nginx_access_log: /var/log/nginx/access.log
@@ -91,6 +114,12 @@ filebeat_waf_inputs:
       - /var/log/syslog
     fields:
       log_type: syslog
+      node_role: waf
+  - id: openstack-db-flow
+    paths:
+      - "{{ openstack_db_flow_log_path }}"
+    fields:
+      log_type: db_flow
       node_role: waf
 
 filebeat_app_inputs:

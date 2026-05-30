@@ -1,15 +1,43 @@
 # Hybrid Cloud NAC/WAF/App/DB Lab
 
-Ngay cap nhat: 2026-05-29
+Ngày cập nhật: 2026-05-30
 
-Repo nay trien khai lab hybrid cloud gom AWS va OpenStack, co NAC bang Amazon Cognito, WAF ModSecurity/OWASP CRS o ca hai cloud, app Flask nhe, PostgreSQL centralized tren OpenStack, SIEM/ELK, va Route 53 DNS failover/failback.
+## Cập nhật mới nhất
 
-Doc lien quan:
+- OpenStack đã được triển khai lại thành công với:
+  - `vpn_public_ip`: `172.10.10.209`
+  - `waf_node_ip`: `10.0.2.10`
+  - `app_node_ip`: `10.0.1.214`
+- Terraform AWS đã cập nhật Route 53 secondary failover record từ `172.10.10.208` sang `172.10.10.209`.
+- Terraform AWS đã cập nhật security group của AWS VPN để cho phép WireGuard UDP `51820` từ WAN IP hiện tại `113.178.207.9/32`.
+- Terraform state của cả `terraform/aws` và `terraform/openstack` đã được migrate lên S3 backend:
+  - S3 bucket: `nt524-terraform-state-211116632423-ap-southeast-1`
+  - DynamoDB lock table: `nt524-terraform-locks`
+- AWS key hiện dùng cho Ansible/Terraform local là `~/.ssh/vpn_key` và `~/.ssh/vpn_key.pub`.
+- Ansible inventory thật nằm tại `ansible/inventories/production/hosts.yml`.
+- Terraform AWS đã tạo EC2 `aws-db-node` riêng trên AWS, chạy PostgreSQL primary.
+- AWS DB private IP: `172.31.3.61`.
+- AWS app và OpenStack app đều đang trỏ `DATABASE_URL` về AWS DB primary `172.31.3.61`.
+- OpenStack DB đã được loại khỏi topology. OpenStack app bắt buộc đi DB theo luồng `OpenStack App -> OpenStack WAF -> OpenStack VPN -> AWS VPN -> AWS DB`.
+- OpenStack WAF ghi log riêng các request TCP/5432 từ OpenStack app tới AWS DB vào `siem-db-flow-*`.
+- WireGuard site-to-site đã cập nhật thành công bằng key mới và đã thêm TCP MSS clamp để tránh kẹt kết nối PostgreSQL/logging qua tunnel. Public key WireGuard của OpenStack VPN là:
 
-- `docs/devsecops-phases.md`: giai thich project tap trung vao stage nao trong DevSecOps, va chi tiet Monitoring, Logging, Detect, Response.
-- `docs/feedback-api.md`: cach dung Feedback API, dataset label flow va export tuned WAF rules.
+```text
+gaGs+OT8PGNs1PCvhcYtPwVyCfjJ+B3ZYqrYqLCiRHc=
+```
 
-## Trang Thai Hien Tai
+Public key này hiện đã được cấu hình ở peer `aws-vpn`.
+
+## Tổng quan
+
+Repo này triển khai lab hybrid cloud gồm AWS và OpenStack, có NAC bằng Amazon Cognito, WAF ModSecurity/OWASP CRS ở cả hai cloud, app Flask nhẹ, PostgreSQL primary trên AWS, SIEM/ELK, và Route 53 DNS failover/failback.
+
+Tài liệu liên quan:
+
+- `docs/devsecops-phases.md`: giải thích project tập trung vào stage nào trong DevSecOps, và chi tiết Monitoring, Logging, Detect, Response.
+- `docs/feedback-api.md`: cách dùng Feedback API, dataset label flow và export tuned WAF rules.
+
+## Trạng Thái Hiện Tại
 
 Entrypoint public:
 
@@ -17,34 +45,34 @@ Entrypoint public:
 https://app.nt524.io.vn/
 ```
 
-Hien tai browser se can accept warning TLS vi gateway dang dung self-signed certificate cho lab HTTPS.
+Hiện tại browser sẽ cần accept warning TLS vì gateway đang dùng self-signed certificate cho lab HTTPS.
 
-Da hoan thanh:
+Đã hoàn thành:
 
 - Route 53 failover DNS cho `app.nt524.io.vn`.
-- Amazon Cognito Hosted UI + `oauth2-proxy` + Nginx `auth_request` tren gateway.
-- AWS gateway va OpenStack gateway deu enforce login truoc khi vao WAF/app.
-- AWS WAF va OpenStack WAF dung Nginx + ModSecurity v3 + OWASP CRS.
-- AWS app va OpenStack app cung chay Lightweight Flask Auth App.
-- PostgreSQL centralized nam tren OpenStack DB node.
-- WireGuard site-to-site VPN giua AWS va OpenStack.
-- SIEM/ELK logging pipeline voi Filebeat tren gateway/WAF/app/VPN nodes.
-- Feedback API cho WAF payload review, dataset label va export tuned ModSecurity rules.
-- Da bo GitHub Actions cu; rule/image update hien duoc van hanh tu controller bang local tooling va Ansible.
-- Test SQLi qua gateway/WAF tra HTTP `403`.
-- Test Route 53 failover/failback thanh cong sau khi them Cognito.
+- Amazon Cognito Hosted UI + `oauth2-proxy` + Nginx `auth_request` trên gateway.
+- AWS gateway và OpenStack gateway đều enforce login trước khi vào WAF/app.
+- AWS WAF và OpenStack WAF dùng Nginx + ModSecurity v3 + OWASP CRS.
+- AWS app và OpenStack app cùng chạy Lightweight Flask Auth App.
+- PostgreSQL chạy single-primary trên AWS DB; OpenStack app truy cập AWS DB qua WAF/VPN để có thể monitor/log/detect DB flow.
+- WireGuard site-to-site VPN giữa AWS và OpenStack.
+- SIEM/ELK logging pipeline với Filebeat trên gateway/WAF/app/VPN nodes.
+- Feedback API cho WAF payload review, dataset label và export tuned ModSecurity rules.
+- Đã bỏ GitHub Actions cũ; rule/image update hiện được vận hành từ controller bằng local tooling và Ansible.
+- Test SQLi qua gateway/WAF trả HTTP `403`.
+- Test Route 53 failover/failback thành công sau khi thêm Cognito.
 
-Con can lam:
+Còn cần làm:
 
-- Thay self-signed gateway TLS cert bang Let's Encrypt/public TLS cert.
-- Giam rui ro public WAN IP OpenStack/laptop thay doi lam WireGuard SG chan tunnel.
-- Neu can, tach health endpoint gateway rieng thay vi proxy `/healthz` cua app.
+- Thay self-signed gateway TLS cert bằng Let's Encrypt/public TLS cert.
+- Giảm rủi ro public WAN IP OpenStack/laptop thay đổi làm WireGuard SG chặn tunnel.
+- Nếu cần, tách health endpoint gateway riêng thay vì proxy `/healthz` của app.
 
-## Kien Truc
+## Kiến Trúc
 
-### Hinh 1 - Kien Truc Tong The
+### Hình 1 - Kiến Trúc Tổng Thể
 
-Hinh nay the hien luong logic tong the, khong di sau vao dich vu cu the tren tung node.
+Hình này thể hiện luồng logic tổng thể, không đi sâu vào dịch vụ cụ thể trên từng node.
 
 ```mermaid
 flowchart LR
@@ -57,13 +85,14 @@ flowchart LR
         AWS_GW["AWS Access Gateway<br/>Verify session/token"]
         AWS_WAF["AWS WAF<br/>Security enforcement"]
         AWS_APP["AWS App Endpoint"]
+        AWS_DB["Primary Database"]
     end
 
     subgraph OS["OpenStack Cloud"]
         OS_GW["OpenStack Access Gateway<br/>Verify session/token"]
         OS_WAF["OpenStack WAF<br/>Security enforcement"]
         OS_APP["OpenStack App Endpoint"]
-        DB["Centralized Database"]
+        OS_DB["Standby Database"]
     end
 
     subgraph OPS["Security Operations Plane"]
@@ -81,8 +110,9 @@ flowchart LR
     AAA -. "Authorization code callback" .-> OS_GW
     AWS_GW <--> VPN <--> OS_GW
 
-    AWS_GW --> AWS_WAF --> AWS_APP --> VPN --> DB
-    OS_GW --> OS_WAF --> OS_APP --> DB
+    AWS_GW --> AWS_WAF --> AWS_APP --> AWS_DB
+    OS_GW --> OS_WAF --> OS_APP
+    OS_APP -->|"DB TCP/5432"| OS_WAF --> VPN --> AWS_DB
 
     AWS_GW --> SIEM
     OS_GW --> SIEM
@@ -95,14 +125,14 @@ flowchart LR
     Feedback --> OS_WAF
 ```
 
-Tom tat control plane va app plane:
+Tóm tắt control plane và app plane:
 
 - Control plane: `Route 53`, `AAA`, access gateway, WAF, monitoring/logging/detection, feedback/rule response.
-- App plane: AWS app endpoint, OpenStack app endpoint, centralized database.
+- App plane: AWS app endpoint, OpenStack app endpoint, AWS primary database. OpenStack không còn DB node.
 
-### Hinh 2 - Kien Truc Trien Khai
+### Hình 2 - Kiến Trúc Triển Khai
 
-Hinh nay anh xa Hinh 1 vao cac node, IP va cong nghe dang chay trong lab.
+Hình này ánh xạ Hình 1 vào các node, IP và công nghệ đang chạy trong lab.
 
 ```mermaid
 flowchart LR
@@ -114,14 +144,14 @@ flowchart LR
         AWS_GW["aws-gateway<br/>Public IP: 122.248.227.98<br/>Nginx + oauth2-proxy<br/>Self-signed HTTPS"]
         AWS_WAF["aws-waf<br/>Private IP: 172.31.4.221<br/>Nginx + ModSecurity v3<br/>OWASP CRS + tuned rules"]
         AWS_APP["aws-app<br/>Private IP: 172.31.8.161<br/>Lightweight Flask Auth App"]
+        AWS_DB["aws-db<br/>Private IP: 172.31.3.61<br/>PostgreSQL primary"]
         AWS_VPN["aws-vpn<br/>Public IP: 54.169.109.49<br/>WireGuard 10.200.0.1"]
     end
 
     subgraph OPENSTACK["OpenStack Cloud"]
-        OS_GW["openstack-gateway<br/>Floating IP: 172.10.10.208<br/>Nginx + oauth2-proxy<br/>Also VPN gateway"]
+        OS_GW["openstack-gateway<br/>Floating IP: 172.10.10.209<br/>Nginx + oauth2-proxy<br/>Also VPN gateway"]
         OS_WAF["openstack-waf<br/>Transit IP: 10.0.2.10<br/>App-net IP: 10.0.1.254<br/>Nginx + ModSecurity v3<br/>OWASP CRS + tuned rules"]
-        OS_APP["openstack-app<br/>Private IP: 10.0.1.244<br/>Lightweight Flask Auth App"]
-        OS_DB["openstack-db<br/>Private IP: 10.0.1.94<br/>PostgreSQL centralized"]
+        OS_APP["openstack-app<br/>Private IP: 10.0.1.214<br/>Lightweight Flask Auth App"]
         OS_VPN["WireGuard on gateway<br/>Transit IP: 10.0.2.254<br/>WireGuard 10.200.0.2"]
     end
 
@@ -146,11 +176,12 @@ flowchart LR
     AWS_GW --> AWS_WAF --> AWS_APP
     OS_GW --> OS_WAF --> OS_APP
 
-    AWS_APP -->|"DATABASE_URL over VPN"| AWS_VPN
+    AWS_APP -->|"DATABASE_URL TCP/5432"| AWS_DB
+    OS_APP -->|"DATABASE_URL TCP/5432"| OS_WAF
     AWS_VPN <-->|"WireGuard tunnel"| OS_VPN
-    OS_VPN --> OS_WAF
-    AWS_APP --> OS_DB
-    OS_APP --> OS_DB
+    OS_VPN -->|"gateway proxy traffic"| OS_WAF
+    OS_WAF -->|"DB flow log + route to AWS DB"| OS_VPN
+    AWS_VPN --> AWS_DB
 
     AWS_GW --> Filebeat
     OS_GW --> Filebeat
@@ -166,21 +197,21 @@ flowchart LR
 
 Important traffic rules:
 
-- User hop le di qua `Gateway -> WAF -> App`.
-- App public HTTP tren AWS bi chan; user khong di truc tiep vao app.
-- AWS WAF khong con public EIP; chi nhan traffic tu AWS gateway/private network.
-- OpenStack public entrypoint hien dung `vpn-gateway` kiem gateway proxy.
-- `/healthz` tren gateway de public de Route 53 health check khong bi redirect login.
-- AWS route table hien route ca `10.0.1.0/24` va `10.0.2.0/24` qua AWS VPN ENI de app DB traffic va Filebeat/Logstash traffic deu di duoc qua VPN.
+- User hợp lệ đi qua `Gateway -> WAF -> App`.
+- App public HTTP trên AWS bị chặn; user không đi trực tiếp vào app.
+- AWS WAF không còn public EIP; chỉ nhận traffic từ AWS gateway/private network.
+- OpenStack public entrypoint hiện dùng `vpn-gateway` kiêm gateway proxy.
+- `/healthz` trên gateway để public để Route 53 health check không bị redirect login.
+- AWS route table hiện route cả `10.0.1.0/24` và `10.0.2.0/24` qua AWS VPN ENI để app DB traffic và Filebeat/Logstash traffic đều đi được qua VPN.
 
-## Dia Chi Hien Tai
+## Địa Chỉ Hiện Tại
 
 DNS/domain:
 
 ```text
 FQDN: app.nt524.io.vn
 Primary: AWS gateway 122.248.227.98
-Secondary: OpenStack gateway 172.10.10.208
+Secondary: OpenStack gateway 172.10.10.209
 TTL: 30s
 Route 53 health check path: /healthz
 Route 53 health check ID: f8c7d0d4-b6fc-4311-b5bd-2c5fe44e3ed9
@@ -198,12 +229,11 @@ ns-916.awsdns-50.net
 OpenStack:
 
 ```text
-vpn_public_ip: 172.10.10.208
+vpn_public_ip: 172.10.10.209
 waf_node_ip: 10.0.2.10
-app_node_ip: 10.0.1.244
-db_node_ip: 10.0.1.94
+app_node_ip: 10.0.1.214
 waf transit CIDR: 10.0.2.0/24
-app/db CIDR: 10.0.1.0/24
+app CIDR: 10.0.1.0/24
 ```
 
 AWS:
@@ -214,6 +244,7 @@ vpn_public_ip: 54.169.109.49
 waf_private_ip: 172.31.4.221
 app_private_ip: 172.31.8.161
 app_public_ip: 13.212.148.187
+db_private_ip: 172.31.3.61
 ECR WAF image: 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest
 ```
 
@@ -250,13 +281,13 @@ ansible/roles/nginx_waf     Nginx/ModSecurity/CRS WAF role
 ansible/roles/simple_auth_app Flask app role
 ansible/roles/postgresql_centralized PostgreSQL role
 elk/                        Local ELK/SIEM stack
-docs/devsecops-phases.md    DevSecOps phase mapping va Monitoring/Logging/Detect/Response
-docs/feedback-api.md        Feedback API va ML/WAF tuning workflow
+docs/devsecops-phases.md    DevSecOps phase mapping và Monitoring/Logging/Detect/Response
+docs/feedback-api.md        Feedback API và ML/WAF tuning workflow
 docs/task.md                Detailed task log and latest operational notes
 docs/1.md                   Architecture/design plan
 ```
 
-## Trien Khai Va Van Hanh
+## Triển Khai Và Vận Hành
 
 ### Terraform OpenStack
 
@@ -268,7 +299,7 @@ terraform -chdir=terraform/openstack apply
 terraform -chdir=terraform/openstack output
 ```
 
-Neu recreate OpenStack, cap nhat lai IP trong:
+Nếu recreate OpenStack, cập nhật lại IP trong:
 
 ```text
 ansible/inventories/production/hosts.yml
@@ -278,7 +309,7 @@ terraform/aws/terraform.tfvars
 
 ### Terraform AWS
 
-Cap nhat `terraform/aws/terraform.tfvars`:
+Cập nhật `terraform/aws/terraform.tfvars`:
 
 ```hcl
 aws_region = "ap-southeast-1"
@@ -292,7 +323,7 @@ route53_failover_enabled     = true
 route53_create_hosted_zone   = true
 route53_zone_name            = "nt524.io.vn"
 route53_record_name          = "app"
-route53_secondary_gateway_ip = "172.10.10.208"
+route53_secondary_gateway_ip = "172.10.10.209"
 route53_health_check_path    = "/healthz"
 
 cognito_enabled         = true
@@ -310,7 +341,7 @@ terraform -chdir=terraform/aws apply
 terraform -chdir=terraform/aws output
 ```
 
-Sau khi tao Cognito, lay client secret cho `oauth2-proxy`:
+Sau khi tạo Cognito, lấy client secret cho `oauth2-proxy`:
 
 ```bash
 terraform -chdir=terraform/aws output -raw cognito_user_pool_client_id
@@ -318,7 +349,7 @@ terraform -chdir=terraform/aws output -raw cognito_user_pool_client_secret
 terraform -chdir=terraform/aws output -raw cognito_issuer_url
 ```
 
-Cap nhat cac gia tri nay trong:
+Cập nhật các giá trị này trong:
 
 ```text
 ansible/inventories/production/group_vars/all.yml
@@ -326,7 +357,7 @@ ansible/inventories/production/group_vars/all.yml
 
 ### Build/Push WAF Image
 
-GitHub Actions workflow cu da bi go bo vi khong con phu hop topology hien tai: workflow chi deploy AWS WAF, dung path/template cu va GitHub runner khong reach duoc OpenStack WAF/private path. Hien tai build/push image chi can lam khi thay doi Dockerfile/base WAF image; sau do deploy bang Ansible.
+GitHub Actions workflow cũ đã bị gỡ bỏ vì không còn phù hợp topology hiện tại: workflow chỉ deploy AWS WAF, dùng path/template cũ và GitHub runner không reach được OpenStack WAF/private path. Hiện tại build/push image chỉ cần làm khi thay đổi Dockerfile/base WAF image; sau đó deploy bằng Ansible.
 
 ```bash
 aws ecr get-login-password --region ap-southeast-1 \
@@ -340,7 +371,7 @@ docker build --network=host \
 docker push 211116632423.dkr.ecr.ap-southeast-1.amazonaws.com/my-waf-nginx:latest
 ```
 
-Neu chi retrain/export ModSecurity rule tu Feedback API/ML thi khong can build lai image ECR. Chi cap nhat file rule va reload WAF bang Ansible:
+Nếu chỉ retrain/export ModSecurity rule từ Feedback API/ML thì không cần build lại image ECR. Chỉ cập nhật file rule và reload WAF bằng Ansible:
 
 ```bash
 cd /home/deployer/Downloads/Project/modsec-learn
@@ -358,11 +389,11 @@ ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
   --tags update_rules
 ```
 
-Lenh `--tags update_rules` copy `RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf` len ca AWS WAF va OpenStack WAF, sau do reload Nginx trong container WAF.
+Lệnh `--tags update_rules` copy `RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf` lên cả AWS WAF và OpenStack WAF, sau đó reload Nginx trong container WAF.
 
 ### Ansible
 
-Dung virtualenv Ansible hien tai:
+Dùng virtualenv Ansible hiện tại:
 
 ```bash
 export ANSIBLE_LOCAL_TEMP=/tmp/ansible-local
@@ -378,7 +409,7 @@ Syntax-check:
 /home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/gateway.yml --syntax-check
 ```
 
-Deploy theo thu tu:
+Deploy theo thứ tự:
 
 ```bash
 /home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/network_vpn.yml
@@ -387,7 +418,7 @@ Deploy theo thu tu:
 /home/deployer/kolla-venv/bin/ansible-playbook -i ansible/inventories/production/hosts.yml ansible/gateway.yml
 ```
 
-## Kiem Tra Nhanh
+## Kiểm Tra Nhanh
 
 DNS:
 
@@ -400,7 +431,7 @@ Gateway health:
 
 ```bash
 curl -fsS http://122.248.227.98/healthz
-curl -fsS http://172.10.10.208/healthz
+curl -fsS http://172.10.10.209/healthz
 curl -k -fsS https://app.nt524.io.vn/healthz
 ```
 
@@ -410,16 +441,94 @@ Auth redirect:
 curl -k -I https://app.nt524.io.vn/
 ```
 
-Ket qua dung la `302` sang Cognito Hosted UI khi chua login.
+Kết quả đúng là `302` sang Cognito Hosted UI khi chưa login.
+
+## Test End-to-End Cho Người Dùng
+
+Luồng browser cần test:
+
+1. Mở cửa sổ ẩn danh.
+2. Vào `https://app.nt524.io.vn/`.
+3. Kỳ vọng: gateway redirect sang Amazon Cognito Hosted UI vì chưa có session.
+4. Chọn tạo tài khoản hoặc đăng nhập bằng user demo.
+5. Sau callback `/oauth2/callback`, browser vào được `Hybrid Auth App`.
+6. Tạo một private note để sinh dữ liệu DB.
+7. Đóng tab, mở lại `https://app.nt524.io.vn/` trong cùng browser profile.
+8. Kỳ vọng: không phải nhập lại mật khẩu vì cookie `_hybrid_auth` của `oauth2-proxy` vẫn còn hợp lệ.
+9. Nhấn `Sign out`.
+10. Kỳ vọng: app redirect qua `/oauth2/sign_out`, clear cookie `oauth2-proxy`, gọi Cognito `/logout`, rồi quay lại URL public và yêu cầu login lại.
+
+Lưu ý: nếu chỉ gọi `/logout` trong app mà không đi qua `/oauth2/sign_out`, gateway sẽ lập tức xác thực lại bằng cookie/token cũ. Source hiện tại đã cấu hình Sign Out theo chuỗi đúng:
+
+```text
+App /logout -> /oauth2/sign_out -> Cognito /logout -> https://app.nt524.io.vn/
+```
+
+Kiểm tra người dùng vào được web ở cả hai cloud:
+
+```bash
+curl -fsS http://122.248.227.98/healthz
+curl -fsS http://172.10.10.209/healthz
+curl -k -fsS https://app.nt524.io.vn/healthz
+```
+
+Với browser, cách dễ nhất là test bình thường qua domain cho AWS primary, sau đó tạm fail AWS gateway hoặc sửa hosts local trỏ `app.nt524.io.vn` về `172.10.10.209` để test OpenStack gateway. Không truy cập trực tiếp IP bằng browser cho OAuth flow chính thức, vì Cognito callback/logout URL đang đăng ký theo hostname `https://app.nt524.io.vn`.
 
 SQLi WAF test:
 
 ```bash
-curl -k -o /dev/null -s -w "%{http_code}\n" \
-  "https://app.nt524.io.vn/?id=1%20OR%201=1"
+cd ansible
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
+ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
+ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
+ansible -i inventories/production/hosts.yml 'aws-waf:openstack-waf' -b -m shell \
+  -a 'curl -o /tmp/sqli.out -s -w "%{http_code}\n" "http://127.0.0.1/?id=1%20OR%201=1"'
 ```
 
-Ket qua ky vong: `403`.
+Kết quả kỳ vọng: `403`.
+
+Nếu test qua `https://app.nt524.io.vn/` khi chưa đăng nhập, kết quả đúng sẽ là `302` sang Cognito trước khi request đi tới WAF. Muốn test WAF qua public domain thì cần thực hiện trong browser/curl đã có cookie đăng nhập hợp lệ.
+
+XSS WAF test:
+
+```bash
+cd ansible
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
+ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
+ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
+ansible -i inventories/production/hosts.yml 'aws-waf:openstack-waf' -b -m shell \
+  -a 'curl -o /tmp/xss.out -s -w "%{http_code}\n" "http://127.0.0.1/?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E"'
+```
+
+Kết quả kỳ vọng: `403`. Log sẽ vào `siem-waf-access-*` và hiện trong Kibana dashboard `WAF Security - Attack & False Positive Review`.
+
+Kiểm tra AWS DB và log flow DB từ OpenStack app:
+
+```bash
+cd ansible
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
+ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
+ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
+ansible -i inventories/production/hosts.yml aws-db -b -m shell \
+  -a 'docker exec hybrid-auth-postgres psql -U hybrid_auth -d hybrid_auth -c "select inet_server_addr(), pg_is_in_recovery();"'
+
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
+ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
+ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
+ansible -i inventories/production/hosts.yml openstack-app -b -m shell \
+  -a 'curl -fsS http://127.0.0.1/healthz'
+
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local \
+ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
+ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp \
+ansible -i inventories/production/hosts.yml openstack-waf -b -m shell \
+  -a 'tail -n 20 /var/log/openstack-db-flow.log'
+```
+
+Kết quả đúng:
+
+- `aws-db`: `pg_is_in_recovery = f`.
+- `openstack-waf`: thấy log prefix `OPENSTACK_APP_TO_AWS_DB` với `SRC=10.0.1.214`, `DST=172.31.3.61`, `DPT=5432`.
 
 Route 53 health check:
 
@@ -439,13 +548,13 @@ Failover:
   aws-gateway -b -m systemd -a 'name=nginx state=stopped'
 
 dig +short @ns-1270.awsdns-30.org app.nt524.io.vn A
-curl -fsS http://172.10.10.208/healthz
+curl -fsS http://172.10.10.209/healthz
 ```
 
-Ket qua ky vong sau khi Route 53 health check fail:
+Kết quả kỳ vọng sau khi Route 53 health check fail:
 
 ```text
-app.nt524.io.vn -> 172.10.10.208
+app.nt524.io.vn -> 172.10.10.209
 ```
 
 Failback:
@@ -458,17 +567,17 @@ dig +short @ns-1270.awsdns-30.org app.nt524.io.vn A
 curl -fsS http://122.248.227.98/healthz
 ```
 
-Ket qua ky vong:
+Kết quả kỳ vọng:
 
 ```text
 app.nt524.io.vn -> 122.248.227.98
 ```
 
-Lan test gan nhat ngay 2026-05-27 da thanh cong: DNS failover sang OpenStack, sau do failback ve AWS; Route 53 health check cuoi test `8/8 Success`.
+Lần test gần nhất ngày 2026-05-27 đã thành công: DNS failover sang OpenStack, sau đó failback về AWS; Route 53 health check cuối test `8/8 Success`.
 
 ## ELK/SIEM
 
-Chay ELK local:
+Chạy ELK local:
 
 ```bash
 cd elk
@@ -477,7 +586,7 @@ sudo docker compose up -d --remove-orphans
 python3 kibana/provision_kibana.py
 ```
 
-Logging hien dung Filebeat -> Logstash -> Elasticsearch -> Kibana. Dashboard can tiep tuc mo rong de phan biet ingress, east-west, failover va failback.
+Logging hiện dùng Filebeat -> Logstash -> Elasticsearch -> Kibana. Dashboard đã có các view tổng quan, WAF/security, service health và response operations; có thể tiếp tục mở rộng thêm field để phân biệt ingress, east-west, failover và failback chi tiết hơn.
 
 Logstash listener:
 
@@ -485,21 +594,21 @@ Logstash listener:
 openstack-vpn 10.0.2.254:5044
 ```
 
-Filebeat hien thu log tu:
+Filebeat hiện thu log từ:
 
-- Gateway nodes: Nginx gateway access/error log va syslog.
-- WAF nodes: Docker/Nginx/ModSecurity log va syslog.
-- App nodes: Docker app log va syslog.
+- Gateway nodes: Nginx gateway access/error log và syslog.
+- WAF nodes: Docker/Nginx/ModSecurity log và syslog.
+- App nodes: Docker app log và syslog.
 - VPN nodes: syslog/WireGuard/system events.
 
-Dashboard duoc provision boi `elk/kibana/provision_kibana.py`:
+Dashboard được provision bởi `elk/kibana/provision_kibana.py`:
 
-- `SIEM Hybrid Overview`: tong quan log volume theo thoi gian, host va role.
-- `Service Health - Load & Error Monitoring`: monitoring request throughput, 5xx, syslog high severity va log volume.
-- `WAF Security - Attack & False Positive Review`: detect WAF block/403, top IP/path va detail cho feedback.
+- `SIEM Hybrid Overview`: tổng quan log volume theo thời gian, host và role.
+- `Service Health - Load & Error Monitoring`: monitoring request throughput, 5xx, syslog high severity và log volume.
+- `WAF Security - Attack & False Positive Review`: detect WAF block/403, top IP/path và detail cho feedback.
 - `Response Operations - WAF/Auth/Infra`: response queue cho WAF block, 5xx, auth/gateway/VPN/syslog events.
 
-Mapping chi tiet giua Monitoring, Logging, Detect va Response nam trong:
+Mapping chi tiết giữa Monitoring, Logging, Detect và Response nằm trong:
 
 ```text
 docs/devsecops-phases.md
@@ -517,11 +626,11 @@ Health:    http://127.0.0.1:5005/healthz
 Docs:      docs/feedback-api.md
 ```
 
-## Luu Y Van Hanh
+## Lưu Ý Vận Hành
 
-- `openstack_vpn_public_cidr` phai la WAN/NAT public IP that cua laptop/OpenStack AIO, khong phai floating IP `172.10.10.x`.
-- Neu WAN IP doi, AWS WireGuard SG se chan tunnel cho den khi cap nhat `openstack_vpn_public_cidr` va `terraform apply`.
-- App AWS va OpenStack cung doc/ghi PostgreSQL centralized tren `10.0.1.94`.
-- `/healthz` khong bi auth de Route 53 health check co the danh gia gateway/app path.
-- Self-signed TLS cert chi phu hop lab. Khi dung browser/demo chinh thuc nen cap public cert.
-- Chi tiet lich su thay doi nam trong `docs/task.md`.
+- `openstack_vpn_public_cidr` phải là WAN/NAT public IP thật của laptop/OpenStack AIO, không phải floating IP `172.10.10.x`.
+- Nếu WAN IP đổi, AWS WireGuard SG sẽ chặn tunnel cho đến khi cập nhật `openstack_vpn_public_cidr` và `terraform apply`.
+- Trạng thái hiện tại: App AWS và OpenStack dùng AWS PostgreSQL primary. OpenStack DB đã bỏ; không còn promote/failover DB sang OpenStack.
+- `/healthz` không bị auth để Route 53 health check có thể đánh giá gateway/app path.
+- Self-signed TLS cert chỉ phù hợp lab. Khi dùng browser/demo chính thức nên cấp public cert.
+- Chi tiết lịch sử thay đổi nằm trong `docs/task.md`.

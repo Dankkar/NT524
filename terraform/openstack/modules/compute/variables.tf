@@ -7,7 +7,6 @@ variable "waf_sg_id" {}
 variable "app_sg_name" {}
 variable "vpn_sg_name" {}
 variable "waf_sg_name" {}
-variable "db_sg_name" {}
 variable "floating_ip" {}
 variable "app_network_id" {}
 variable "app_subnet_id" {}
@@ -35,10 +34,6 @@ variable "app_node_name" {
 }
 
 variable "waf_node_name" {
-  type = string
-}
-
-variable "db_node_name" {
   type = string
 }
 

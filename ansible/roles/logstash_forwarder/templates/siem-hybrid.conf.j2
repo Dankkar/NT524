@@ -35,8 +35,84 @@ filter {
     }
   }
 
+  # ─── OpenStack WAF routed DB flow: request and response ───────────────────
+  if [fields][node_role] == "waf" and [fields][log_type] == "db_flow" {
+    grok {
+      match => {
+        "message" => [
+          "%{TIMESTAMP_ISO8601:syslog_timestamp} %{SYSLOGHOST:syslog_host} kernel: (?:\\[[^\\]]+\\] )?%{GREEDYDATA:db_flow_raw}",
+          "%{SYSLOGTIMESTAMP:syslog_timestamp} %{SYSLOGHOST:syslog_host} kernel: (?:\\[[^\\]]+\\] )?%{GREEDYDATA:db_flow_raw}",
+          "(?:\\[[^\\]]+\\] )?%{GREEDYDATA:db_flow_raw}"
+        ]
+      }
+      tag_on_failure => ["_db_flow_grok_failure"]
+    }
+
+    if [syslog_timestamp] {
+      date {
+        match  => [ "syslog_timestamp", "ISO8601", "MMM  d HH:mm:ss", "MMM dd HH:mm:ss" ]
+        target => "@timestamp"
+        remove_field => ["syslog_timestamp"]
+      }
+    }
+
+    if [db_flow_raw] {
+      kv {
+        source => "db_flow_raw"
+        target => "db_flow"
+        field_split => " "
+        value_split => "="
+      }
+    }
+
+    if ![db_flow][SRC] or ![db_flow][DST] or ![db_flow][DPT] {
+      drop { }
+    }
+
+    if [db_flow][SRC] {
+      mutate { add_field => { "client_ip" => "%{[db_flow][SRC]}" } }
+    }
+    if [db_flow][DST] {
+      mutate { add_field => { "db_target_ip" => "%{[db_flow][DST]}" } }
+    }
+    if [db_flow][DPT] {
+      mutate { add_field => { "db_target_port" => "%{[db_flow][DPT]}" } }
+      mutate { convert => { "db_target_port" => "integer" } }
+    }
+    if [db_flow][SPT] {
+      mutate { add_field => { "db_source_port" => "%{[db_flow][SPT]}" } }
+      mutate { convert => { "db_source_port" => "integer" } }
+    }
+    if [db_flow][PROTO] {
+      mutate { add_field => { "network_transport" => "%{[db_flow][PROTO]}" } }
+    }
+
+    if [message] =~ /AWS_DB_TO_OPENSTACK_APP/ {
+      mutate {
+        add_tag => ["db_flow", "aws_db_to_openstack_app"]
+        add_field => { "flow_direction" => "aws_db_to_openstack_app" }
+      }
+    } else if [message] =~ /OPENSTACK_APP_TO_AWS_DB/ {
+      mutate {
+        add_tag => ["db_flow", "openstack_app_to_aws_db"]
+        add_field => { "flow_direction" => "openstack_app_to_aws_db" }
+      }
+    } else {
+      mutate {
+        add_tag => ["db_flow", "unknown_db_flow_direction"]
+        add_field => { "flow_direction" => "unknown" }
+      }
+    }
+
+    mutate {
+      add_field => {
+        "log_source_index" => "siem-db-flow"
+      }
+    }
+  }
+
   # ─── WAF node: nginx access log ─────────────────────────────────────────────
-  if [fields][node_role] == "waf" and [fields][log_type] == "docker_container" {
+  else if [fields][node_role] == "waf" and [fields][log_type] == "docker_container" {
 
     # Try nginx access log format:
     # $remote_addr - $remote_user [$time_local] "$request"
@@ -212,6 +288,11 @@ output {
     elasticsearch {
       hosts => ["http://{{ elasticsearch_host }}:{{ elasticsearch_port }}"]
       index => "siem-syslog-%{+YYYY.MM.dd}"
+    }
+  } else if [log_source_index] == "siem-db-flow" {
+    elasticsearch {
+      hosts => ["http://{{ elasticsearch_host }}:{{ elasticsearch_port }}"]
+      index => "siem-db-flow-%{+YYYY.MM.dd}"
     }
   } else {
     elasticsearch {

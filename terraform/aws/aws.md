@@ -2,6 +2,25 @@
 
 Tài liệu này hướng dẫn cách cấu hình và triển khai hạ tầng WAF & VPN Gateway trên AWS dùng để kết nối với OpenStack tạo thành hệ thống SIEM Hybrid Cloud.
 
+## Cập nhật hiện tại
+
+- Terraform dùng biến `aws_profile`; để rỗng thì dùng AWS credential chain mặc định của máy chạy.
+- Hạ tầng AWS chính đã tồn tại và được quản lý qua state hiện tại, không tạo lại VPC/EC2 nếu state khớp.
+- OpenStack secondary gateway hiện tại là `172.10.10.209`.
+- WAN IP hiện tại của OpenStack AIO là `14.191.231.153/32`; security group AWS VPN đã cho phép UDP `51820` từ CIDR này.
+- Route 53 record `app.nt524.io.vn` secondary failover đã trỏ tới `172.10.10.209`.
+- Terraform đã được chuẩn bị để tạo thêm EC2 `aws-db` riêng làm PostgreSQL primary.
+- Terraform remote state đã được chuẩn bị:
+  - S3 bucket: `nt524-terraform-state-211116632423-ap-southeast-1`
+  - DynamoDB lock table: `nt524-terraform-locks`
+
+Sau khi clone repo, để dùng state chung:
+
+```bash
+terraform -chdir=terraform/aws init -backend-config=../backend.aws.hcl.example
+terraform -chdir=terraform/openstack init -backend-config=../backend.openstack.hcl.example
+```
+
 ---
 
 ## 1. Cấu trúc thư mục hạ tầng AWS
@@ -38,13 +57,13 @@ cp terraform.tfvars.example terraform.tfvars
     *Lưu ý: Không dùng IP mạng nội bộ hoặc OpenStack Floating IP ở đây. Đây là IP để cho phép kết nối WireGuard qua cổng UDP 51820.*
 
 ### 2.3. Máy chủ ảo & SSH Key
-*   `public_key_path`: Đường dẫn đến file SSH Public Key để đẩy lên AWS (mặc định: `"~/.ssh/aws_vpn_key.pub"`). Đảm bảo khóa đã tồn tại:
+*   `public_key_path`: Đường dẫn đến file SSH Public Key để đẩy lên AWS. Hiện lab dùng `"~/.ssh/vpn_key.pub"`. Đảm bảo khóa đã tồn tại:
     ```bash
-    ssh-keygen -t rsa -b 4096 -f ~/.ssh/aws_vpn_key -N ""
+    ssh-keygen -t ed25519 -f ~/.ssh/vpn_key -N ""
     ```
 *   `keypair_name`: Tên của AWS EC2 Key pair hiển thị trên AWS Console (mặc định: `"aws_vpn_key"`).
-*   `instance_type`: Cấu hình dòng máy chủ EC2 cho cả WAF và VPN (mặc định: `"t3.micro"`).
-*   `vpn_node_name` & `waf_node_name`: Tên thẻ (Name Tag) gán cho máy ảo VPN và WAF để tiện phân biệt trên AWS Console.
+*   `instance_type`: Cấu hình dòng máy chủ EC2 cho gateway, WAF, app, DB và VPN (mặc định: `"t3.micro"`).
+*   `vpn_node_name`, `waf_node_name`, `app_node_name`, `db_node_name`, `gateway_node_name`: Tên thẻ (Name Tag) gán cho các máy ảo để tiện phân biệt trên AWS Console.
 
 ---
 
@@ -74,5 +93,8 @@ cp terraform.tfvars.example terraform.tfvars
 ## 4. Các thông tin thu được (Outputs)
 Khi apply thành công, bạn sẽ nhận được các thông tin sau để điền vào cấu hình Ansible:
 *   `vpn_public_ip`: IP công cộng của AWS VPN Gateway.
-*   `waf_public_ip`: IP công cộng của AWS WAF Node.
+*   `gateway_public_ip`: IP công cộng của AWS Gateway.
+*   `waf_private_ip`: IP private của AWS WAF Node.
+*   `app_private_ip`: IP private của AWS App Node.
+*   `db_private_ip`: IP private của AWS DB Node, dùng để điền vào `aws_db_private_ip` và `ansible_host` của `aws-db` trong Ansible.
 *   `vpn_network_interface_id`: ID của Card mạng AWS VPN Gateway (được dùng để định tuyến cho VPN).

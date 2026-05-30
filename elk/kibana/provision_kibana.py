@@ -12,6 +12,7 @@ IDX_WAF    = "siem-waf-access-*"
 IDX_APP    = "siem-app-access-*"
 IDX_GATEWAY = "siem-gateway-access-*"
 IDX_SYSLOG = "siem-syslog-*"
+IDX_DB     = "siem-db-flow-*"
 IDX_ALL    = "siem-*"
 
 
@@ -54,6 +55,7 @@ def create_data_views():
         ("siem-app-data-view",    IDX_APP,    "SIEM – App Access"),
         ("siem-gateway-data-view", IDX_GATEWAY, "SIEM – Gateway Access"),
         ("siem-syslog-data-view", IDX_SYSLOG, "SIEM – Syslog"),
+        ("siem-db-flow-data-view", IDX_DB, "SIEM – OpenStack App to DB Flow"),
     ]
     for dv_id, pattern, name in views:
         request(
@@ -92,6 +94,15 @@ def time_range_query(gte="now-24h"):
     return {"range": {"@timestamp": {"gte": gte, "lte": "now"}}}
 
 
+def kibana_time_url(index, aggs):
+    return {
+        "%context%": True,
+        "%timefield%": "@timestamp",
+        "index": index,
+        "body": {"size": 0, "aggs": aggs},
+    }
+
+
 def bar_over_time(index, title, extra_query=None):
     query = time_range_query()
     if extra_query:
@@ -122,6 +133,49 @@ def bar_over_time(index, title, extra_query=None):
         "encoding": {
             "x": {"field": "key", "type": "temporal", "title": "Time"},
             "y": {"field": "doc_count", "type": "quantitative", "title": "Count"},
+        },
+    }
+
+
+def bar_over_time_context(index, title):
+    return {
+        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+        "title": title,
+        "data": {
+            "url": kibana_time_url(index, {
+                "events": {
+                    "date_histogram": {
+                        "field": "@timestamp",
+                        "fixed_interval": "5m",
+                        "min_doc_count": 0,
+                    }
+                }
+            }),
+            "format": {"property": "aggregations.events.buckets"},
+        },
+        "mark": {"type": "bar", "tooltip": True},
+        "encoding": {
+            "x": {"field": "key", "type": "temporal", "title": "Time"},
+            "y": {"field": "doc_count", "type": "quantitative", "title": "Events"},
+        },
+    }
+
+
+def top_terms_bar_context(index, field, title, size=15):
+    return {
+        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+        "title": title,
+        "data": {
+            "url": kibana_time_url(index, {
+                "terms": {"terms": {"field": field, "size": size}}
+            }),
+            "format": {"property": "aggregations.terms.buckets"},
+        },
+        "mark": {"type": "bar", "tooltip": True},
+        "encoding": {
+            "y": {"field": "key", "type": "nominal", "title": field, "sort": "-x"},
+            "x": {"field": "doc_count", "type": "quantitative", "title": "Events"},
+            "color": {"field": "key", "type": "nominal", "legend": None},
         },
     }
 
@@ -545,48 +599,14 @@ def create_response_dashboard():
 # ─── Legacy overview dashboard (keep) ────────────────────────────────────────
 
 def create_overview_dashboard():
-    base_q = {"range": {"@timestamp": {"gte": "now-24h", "lte": "now"}}}
-
     specs = {
-        "siem-events-over-time": ("SIEM – Events over Time", {
-            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-            "title": "Events over time",
-            "data": {"url": {"index": IDX_ALL, "body": {"size": 0, "query": base_q,
-                "aggs": {"events": {"date_histogram": {"field": "@timestamp",
-                    "fixed_interval": "5m", "min_doc_count": 0}}}}}},
-            "format": {"property": "aggregations.events.buckets"},
-            "mark": {"type": "bar", "tooltip": True},
-            "encoding": {
-                "x": {"field": "key", "type": "temporal", "title": "Time"},
-                "y": {"field": "doc_count", "type": "quantitative", "title": "Events"},
-            },
-        }),
-        "siem-events-by-role": ("SIEM – Events by Role", {
-            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-            "title": "Events by node role",
-            "data": {"url": {"index": IDX_ALL, "body": {"size": 0, "query": base_q,
-                "aggs": {"roles": {"terms": {"field": "fields.node_role.keyword", "size": 10}}}}}},
-            "format": {"property": "aggregations.roles.buckets"},
-            "mark": {"type": "bar", "tooltip": True},
-            "encoding": {
-                "x": {"field": "key", "type": "nominal", "title": "Role"},
-                "y": {"field": "doc_count", "type": "quantitative", "title": "Events"},
-                "color": {"field": "key", "type": "nominal", "legend": None},
-            },
-        }),
-        "siem-top-hosts": ("SIEM – Top Hosts", {
-            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-            "title": "Top hosts",
-            "data": {"url": {"index": IDX_ALL, "body": {"size": 0, "query": base_q,
-                "aggs": {"hosts": {"terms": {"field": "host.name.keyword", "size": 10}}}}}},
-            "format": {"property": "aggregations.hosts.buckets"},
-            "mark": {"type": "bar", "tooltip": True},
-            "encoding": {
-                "y": {"field": "key", "type": "nominal", "title": "Host", "sort": "-x"},
-                "x": {"field": "doc_count", "type": "quantitative", "title": "Events"},
-                "color": {"field": "key", "type": "nominal", "legend": None},
-            },
-        }),
+        "siem-events-over-time": ("SIEM – Events over Time", bar_over_time_context(IDX_ALL, "Events over time")),
+        "siem-events-by-role": ("SIEM – Events by Role",
+                                top_terms_bar_context(IDX_ALL, "fields.node_role.keyword", "Events by node role", 10)),
+        "siem-top-hosts": ("SIEM – Top Hosts",
+                           top_terms_bar_context(IDX_ALL, "host.name.keyword", "Top hosts", 10)),
+        "siem-events-by-index": ("SIEM – Events by Index",
+                                 top_terms_bar_context(IDX_ALL, "_index", "Events by index", 20)),
     }
 
     for vis_id, (title, spec) in specs.items():
@@ -599,11 +619,14 @@ def create_overview_dashboard():
          "panelIndex": "2", "embeddableConfig": {}, "panelRefName": "panel_2"},
         {"version": "8.13.0", "gridData": {"x": 24, "y": 15, "w": 24, "h": 15, "i": "3"},
          "panelIndex": "3", "embeddableConfig": {}, "panelRefName": "panel_3"},
+        {"version": "8.13.0", "gridData": {"x": 0, "y": 30, "w": 48, "h": 15, "i": "4"},
+         "panelIndex": "4", "embeddableConfig": {}, "panelRefName": "panel_4"},
     ]
     references = [
         {"name": "panel_1", "type": "visualization", "id": "siem-events-over-time"},
         {"name": "panel_2", "type": "visualization", "id": "siem-events-by-role"},
         {"name": "panel_3", "type": "visualization", "id": "siem-top-hosts"},
+        {"name": "panel_4", "type": "visualization", "id": "siem-events-by-index"},
     ]
     put_saved_object(
         "dashboard", "siem-hybrid-overview",
@@ -622,6 +645,80 @@ def create_overview_dashboard():
         references,
     )
     print("  dashboard: SIEM Hybrid Overview")
+
+
+# ─── OpenStack App to DB Flow dashboard ──────────────────────────────────────
+
+def create_db_flow_dashboard():
+    specs = {
+        "siem-db-flow-over-time": (
+            "OpenStack App to DB – Packets over Time",
+            bar_over_time_context(IDX_DB, "DB flow packets over time"),
+        ),
+        "siem-db-flow-direction": (
+            "OpenStack App to DB – Direction",
+            top_terms_bar_context(IDX_DB, "flow_direction.keyword", "DB flow by direction", 5),
+        ),
+        "siem-db-flow-client": (
+            "OpenStack App to DB – Client IP",
+            top_terms_bar_context(IDX_DB, "client_ip.keyword", "DB flow client IP", 10),
+        ),
+        "siem-db-flow-target": (
+            "OpenStack App to DB – Target IP",
+            top_terms_bar_context(IDX_DB, "db_target_ip.keyword", "DB flow target IP", 10),
+        ),
+        "siem-db-flow-target-port": (
+            "OpenStack App to DB – Target Port",
+            top_terms_bar_context(IDX_DB, "db_target_port", "DB flow target port", 10),
+        ),
+        "siem-db-flow-source-port": (
+            "OpenStack App to DB – Source Port",
+            top_terms_bar_context(IDX_DB, "db_source_port", "DB flow source port", 10),
+        ),
+    }
+
+    for vis_id, (title, spec) in specs.items():
+        put_saved_object("visualization", vis_id, vega_vis(title, spec))
+
+    panels = [
+        {"version": "8.13.0", "gridData": {"x": 0, "y": 0, "w": 48, "h": 14, "i": "1"},
+         "panelIndex": "1", "embeddableConfig": {}, "panelRefName": "panel_1"},
+        {"version": "8.13.0", "gridData": {"x": 0, "y": 14, "w": 24, "h": 14, "i": "2"},
+         "panelIndex": "2", "embeddableConfig": {}, "panelRefName": "panel_2"},
+        {"version": "8.13.0", "gridData": {"x": 24, "y": 14, "w": 24, "h": 14, "i": "3"},
+         "panelIndex": "3", "embeddableConfig": {}, "panelRefName": "panel_3"},
+        {"version": "8.13.0", "gridData": {"x": 0, "y": 28, "w": 24, "h": 14, "i": "4"},
+         "panelIndex": "4", "embeddableConfig": {}, "panelRefName": "panel_4"},
+        {"version": "8.13.0", "gridData": {"x": 24, "y": 28, "w": 24, "h": 14, "i": "5"},
+         "panelIndex": "5", "embeddableConfig": {}, "panelRefName": "panel_5"},
+        {"version": "8.13.0", "gridData": {"x": 0, "y": 42, "w": 48, "h": 14, "i": "6"},
+         "panelIndex": "6", "embeddableConfig": {}, "panelRefName": "panel_6"},
+    ]
+    references = [
+        {"name": "panel_1", "type": "visualization", "id": "siem-db-flow-over-time"},
+        {"name": "panel_2", "type": "visualization", "id": "siem-db-flow-direction"},
+        {"name": "panel_3", "type": "visualization", "id": "siem-db-flow-client"},
+        {"name": "panel_4", "type": "visualization", "id": "siem-db-flow-target"},
+        {"name": "panel_5", "type": "visualization", "id": "siem-db-flow-target-port"},
+        {"name": "panel_6", "type": "visualization", "id": "siem-db-flow-source-port"},
+    ]
+    put_saved_object(
+        "dashboard", "openstack-app-to-db",
+        {
+            "title": "Openstack-App-to-DB",
+            "description": "DB packet flow observed on OpenStack WAF for OpenStack App <-> AWS DB.",
+            "panelsJSON": json.dumps(panels),
+            "optionsJSON": json.dumps({"useMargins": True, "syncColors": False,
+                                       "syncCursor": True, "syncTooltips": True,
+                                       "hidePanelTitles": False}),
+            "timeRestore": False,
+            "kibanaSavedObjectMeta": {
+                "searchSourceJSON": json.dumps({"query": {"query": "", "language": "kuery"}, "filter": []})
+            },
+        },
+        references,
+    )
+    print("  dashboard: Openstack-App-to-DB")
 
 
 # ─── Alert Rules ──────────────────────────────────────────────────────────────
@@ -713,6 +810,9 @@ def main():
     print("Creating response operations dashboard...")
     create_response_dashboard()
 
+    print("Creating OpenStack App to DB dashboard...")
+    create_db_flow_dashboard()
+
     print("Creating overview dashboard...")
     create_overview_dashboard()
 
@@ -723,6 +823,7 @@ def main():
     print(f"  WAF dashboard:    {KIBANA_URL}/app/dashboards#/view/siem-waf-security")
     print(f"  Health dashboard: {KIBANA_URL}/app/dashboards#/view/siem-service-health")
     print(f"  Response:         {KIBANA_URL}/app/dashboards#/view/siem-response-operations")
+    print(f"  DB flow:          {KIBANA_URL}/app/dashboards#/view/openstack-app-to-db")
     print(f"  Overview:         {KIBANA_URL}/app/dashboards#/view/siem-hybrid-overview")
 
 

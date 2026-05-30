@@ -8,6 +8,7 @@ from flask import Flask, redirect, render_template, request, session, url_for
 DATABASE_URL = os.environ["DATABASE_URL"]
 TRUST_PROXY_HEADERS = os.getenv("APP_TRUST_PROXY_HEADERS", "true").lower() == "true"
 DEV_LOGIN_ENABLED = os.getenv("APP_DEV_LOGIN_ENABLED", "false").lower() == "true"
+LOGOUT_URL = os.getenv("APP_LOGOUT_URL", "/login")
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("APP_SESSION_SECRET", "change-me")
@@ -177,4 +178,4 @@ def create_note():
 @app.post("/logout")
 def logout():
     session.clear()
-    return redirect(url_for("login"))
+    return redirect(LOGOUT_URL)

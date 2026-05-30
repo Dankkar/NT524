@@ -28,6 +28,41 @@
     group: root
     mode: "0644"
 
+- name: Route OpenStack app nodes through the WAF node
+  ansible.builtin.command: "ip route replace default via {{ openstack_app_gateway_ip }} dev ens3"
+  changed_when: false
+  when: inventory_hostname == 'openstack-app'
+
+- name: Persist OpenStack app default route through the WAF node
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/openstack-app-default-route.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Route OpenStack app node through WAF
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/sbin/ip route replace default via {{ openstack_app_gateway_ip }} dev ens3
+
+      [Install]
+      WantedBy=multi-user.target
+  register: openstack_app_default_route_unit
+  when: inventory_hostname == 'openstack-app'
+
+- name: Enable OpenStack app default route service
+  ansible.builtin.systemd:
+    name: openstack-app-default-route.service
+    enabled: true
+    state: started
+    daemon_reload: "{{ openstack_app_default_route_unit.changed }}"
+  when: inventory_hostname == 'openstack-app'
+
 - name: Install Docker for app
   ansible.builtin.apt:
     name:
@@ -78,6 +113,21 @@
   register: hybrid_app_build
   changed_when: hybrid_app_source.changed or 'Successfully built' in hybrid_app_build.stdout or 'writing image' in hybrid_app_build.stderr
 
+- name: Render app environment file
+  ansible.builtin.copy:
+    dest: "{{ hybrid_app_base_dir }}/app.env"
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      DATABASE_URL={{ hybrid_app_database_url }}
+      APP_SESSION_SECRET={{ hybrid_app_session_secret }}
+      APP_DEV_LOGIN_ENABLED={{ hybrid_app_dev_login_enabled | lower }}
+      APP_TRUST_PROXY_HEADERS={{ hybrid_app_trust_proxy_headers | lower }}
+      APP_LOGOUT_URL={{ hybrid_app_logout_url | default('/login') }}
+  register: hybrid_app_env
+  no_log: true
+
 - name: Inspect lightweight auth app container
   ansible.builtin.command: "docker inspect {{ hybrid_app_container_name }}"
   register: hybrid_app_inspect
@@ -89,7 +139,7 @@
   register: hybrid_app_remove
   changed_when: hybrid_app_remove.rc == 0
   failed_when: hybrid_app_remove.rc not in [0, 1]
-  when: hybrid_app_inspect.rc == 0 and hybrid_app_build.changed
+  when: hybrid_app_inspect.rc == 0 and (hybrid_app_build.changed or hybrid_app_env.changed)
 
 - name: Refresh lightweight auth app inspect result
   ansible.builtin.command: "docker inspect {{ hybrid_app_container_name }}"
@@ -103,10 +153,7 @@
     --name {{ hybrid_app_container_name }}
     --restart unless-stopped
     -p {{ hybrid_app_host_port }}:{{ hybrid_app_container_port }}
-    -e DATABASE_URL={{ hybrid_app_database_url }}
-    -e APP_SESSION_SECRET={{ hybrid_app_session_secret }}
-    -e APP_DEV_LOGIN_ENABLED={{ hybrid_app_dev_login_enabled | lower }}
-    -e APP_TRUST_PROXY_HEADERS={{ hybrid_app_trust_proxy_headers | lower }}
+    --env-file {{ hybrid_app_base_dir }}/app.env
     {{ hybrid_app_image }}
   register: hybrid_app_run
   no_log: true

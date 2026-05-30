@@ -1,6 +1,48 @@
 # Task Log - Hybrid Cloud NAC/WAF/App/DB
 
-Ngay cap nhat: 2026-05-29
+Ngày cập nhật: 2026-05-30
+
+## Cập nhật 2026-05-29 - OpenStack mới, AWS profile local và remote state
+
+- OpenStack đã apply thành công với output mới:
+  - `vpn_public_ip`: `172.10.10.209`
+  - `waf_node_ip`: `10.0.2.10`
+  - `app_node_ip`: `10.0.1.214`
+  - `db_node_ip`: `10.0.1.193`
+- AWS Terraform dùng profile local trên máy triển khai; không hardcode profile trong cấu hình dùng chung.
+- Đã apply AWS để cập nhật đúng hai thay đổi cần thiết:
+  - Route 53 secondary failover record `app.nt524.io.vn`: `172.10.10.208 -> 172.10.10.209`
+  - AWS VPN security group cho phép UDP `51820` từ WAN IP mới `14.191.231.153/32`
+- Đã tạo `ansible/inventories/production/hosts.yml` từ Terraform state hiện tại.
+- Đã chạy Ansible thành công cho phía OpenStack:
+  - `app.yml --limit 'openstack-app:openstack-db'`
+  - `waf.yml --limit openstack-waf`
+  - `gateway.yml --limit openstack-gateway`
+  - `logstash_vpn.yml --limit openstack-vpn`
+- Đã sửa DNS trong các VM OpenStack bằng `/etc/resolv.conf` trực tiếp vì `systemd-resolved` trên `openstack-vpn` không bind được `127.0.0.53`.
+- Chưa chạy được WireGuard hai đầu bằng `network_vpn.yml` vì thiếu quyền/SSH key để cập nhật peer phía AWS VPN.
+- Public key WireGuard mới của OpenStack VPN:
+
+```text
+gaGs+OT8PGNs1PCvhcYtPwVyCfjJ+B3ZYqrYqLCiRHc=
+```
+
+- Đã chuẩn bị PostgreSQL streaming replication:
+  - Source mới chuẩn bị EC2 `aws-db` riêng trên AWS.
+  - Mục tiêu mới: `aws-db` là primary, `openstack-db` là standby/replica.
+  - Đã thêm playbook `ansible/db_failover_openstack.yml` để promote OpenStack DB và redeploy app sang DB failover.
+  - Đã có AWS SSH key mới tại `~/.ssh/vpn_key`.
+  - Terraform AWS đã tạo security group `aws_db_node_sg`.
+  - EC2 `aws-db-node` chưa tạo được vì AWS account đang chạm EC2 running vCPU quota `8`; thử `t2.nano` vẫn bị `VcpuLimitExceeded`.
+- Đã chạy `network_vpn.yml` end-to-end bằng key mới:
+  - AWS VPN và OpenStack VPN đã handshake WireGuard.
+  - Ping `10.200.0.1 <-> 10.200.0.2` thành công.
+- Đã chạy lại `waf.yml --limit openstack-waf` để thêm route/forward rule cho OpenStack app/db egress sang AWS/VPN CIDR.
+- Đã tạo và migrate Terraform state lên remote backend:
+  - S3 bucket: `nt524-terraform-state-211116632423-ap-southeast-1`
+  - DynamoDB lock table: `nt524-terraform-locks`
+  - AWS state key: `aws/terraform.tfstate`
+  - OpenStack state key: `openstack/terraform.tfstate`
 
 ## Cap nhat 2026-05-27 - Domain nt524.io.vn
 

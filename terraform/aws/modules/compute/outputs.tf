@@ -18,6 +18,14 @@ output "app_private_ip" {
   value = aws_instance.app_node.private_ip
 }
 
+output "db_private_ip" {
+  value = aws_instance.db_node.private_ip
+}
+
+output "db_instance_id" {
+  value = aws_instance.db_node.id
+}
+
 output "vpn_private_ip" {
   value = aws_instance.vpn_gateway.private_ip
 }
