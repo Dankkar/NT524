@@ -15,10 +15,9 @@ module "network" {
 }
 
 module "security_group" {
-  source           = "./modules/security_group"
-  app_subnet_cidr  = var.app_subnet_cidr
-  waf_subnet_cidr  = var.waf_subnet_cidr
-  db_allowed_cidrs = var.db_allowed_cidrs
+  source          = "./modules/security_group"
+  app_subnet_cidr = var.app_subnet_cidr
+  waf_subnet_cidr = var.waf_subnet_cidr
 }
 
 module "compute" {
@@ -34,7 +33,6 @@ module "compute" {
   app_sg_name    = module.security_group.app_sg_name
   vpn_sg_name    = module.security_group.vpn_sg_name
   waf_sg_name    = module.security_group.waf_sg_name
-  db_sg_name     = module.security_group.db_sg_name
   floating_ip    = module.network.vpn_floating_ip
 
   keypair_name    = var.keypair_name
@@ -43,7 +41,6 @@ module "compute" {
   flavor_name     = var.flavor_name
   app_node_name   = var.app_node_name
   waf_node_name   = var.waf_node_name
-  db_node_name    = var.db_node_name
   vpn_node_name   = var.vpn_node_name
   vpn_app_ip      = var.vpn_app_ip
   vpn_waf_ip      = var.vpn_waf_ip

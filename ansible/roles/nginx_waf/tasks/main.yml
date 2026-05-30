@@ -38,6 +38,11 @@
     group: root
     mode: "0644"
 
+- name: Route OpenStack WAF through the OpenStack VPN node
+  ansible.builtin.command: "ip route replace default via {{ openstack_vpn_app_ip }} dev ens3"
+  changed_when: false
+  when: inventory_hostname in (groups['openstack_waf'] | default([]))
+
 - name: Enable IPv4 forwarding on OpenStack WAF
   ansible.builtin.lineinfile:
     path: /etc/sysctl.conf
@@ -95,6 +100,118 @@
     - inventory_hostname in (groups['openstack_waf'] | default([]))
     - openstack_waf_app_nat | default(false) | bool
 
+- name: Ensure OpenStack app to AWS DB flow log file exists
+  ansible.builtin.file:
+    path: "{{ openstack_db_flow_log_path }}"
+    state: touch
+    owner: syslog
+    group: adm
+    mode: "0640"
+  changed_when: false
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+    - openstack_db_flow_logging_enabled | default(false) | bool
+
+- name: Route OpenStack app to AWS DB iptables logs into a dedicated file
+  ansible.builtin.copy:
+    dest: /etc/rsyslog.d/30-openstack-db-flow.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      if $programname == 'kernel' and $msg contains '{{ openstack_db_flow_log_prefix | trim }}' then {
+        action(type="omfile" file="{{ openstack_db_flow_log_path }}")
+        stop
+      }
+      if $programname == 'kernel' and $msg contains '{{ openstack_db_response_flow_log_prefix | trim }}' then {
+        action(type="omfile" file="{{ openstack_db_flow_log_path }}")
+        stop
+      }
+  register: openstack_db_flow_rsyslog_config
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+    - openstack_db_flow_logging_enabled | default(false) | bool
+
+- name: Restart rsyslog for OpenStack app to AWS DB flow logging
+  ansible.builtin.systemd:
+    name: rsyslog
+    state: restarted
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+    - openstack_db_flow_logging_enabled | default(false) | bool
+    - openstack_db_flow_rsyslog_config.changed
+
+- name: Check OpenStack app to AWS DB flow log rule
+  ansible.builtin.command: >-
+    iptables -C FORWARD
+    -i {{ openstack_waf_app_interface }}
+    -o {{ openstack_waf_transit_interface }}
+    -s {{ openstack_db_flow_source_cidr }}
+    -d {{ openstack_db_flow_destination_ip }}/32
+    -p tcp --dport {{ openstack_db_flow_destination_port }}
+    -m conntrack --ctstate NEW
+    -j LOG --log-prefix {{ openstack_db_flow_log_prefix | quote }} --log-level 6
+  register: openstack_db_flow_log_check
+  changed_when: false
+  failed_when: openstack_db_flow_log_check.rc not in [0, 1]
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+    - openstack_db_flow_logging_enabled | default(false) | bool
+
+- name: Add OpenStack app to AWS DB flow log rule before egress accept
+  ansible.builtin.command: >-
+    iptables -I FORWARD 1
+    -i {{ openstack_waf_app_interface }}
+    -o {{ openstack_waf_transit_interface }}
+    -s {{ openstack_db_flow_source_cidr }}
+    -d {{ openstack_db_flow_destination_ip }}/32
+    -p tcp --dport {{ openstack_db_flow_destination_port }}
+    -m conntrack --ctstate NEW
+    -j LOG --log-prefix {{ openstack_db_flow_log_prefix | quote }} --log-level 6
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+    - openstack_db_flow_logging_enabled | default(false) | bool
+    - openstack_db_flow_log_check.rc == 1
+
+- name: Check AWS DB response to OpenStack app flow log rule
+  ansible.builtin.command: >-
+    iptables -C FORWARD
+    -i {{ openstack_waf_transit_interface }}
+    -o {{ openstack_waf_app_interface }}
+    -s {{ openstack_db_flow_destination_ip }}/32
+    -d {{ openstack_db_flow_source_cidr }}
+    -p tcp --sport {{ openstack_db_flow_destination_port }}
+    -m conntrack --ctstate ESTABLISHED
+    -j LOG --log-prefix {{ openstack_db_response_flow_log_prefix | quote }} --log-level 6
+  register: openstack_db_response_flow_log_check
+  changed_when: false
+  failed_when: openstack_db_response_flow_log_check.rc not in [0, 1]
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+    - openstack_db_flow_logging_enabled | default(false) | bool
+
+- name: Add AWS DB response to OpenStack app flow log rule before forward accept
+  ansible.builtin.command: >-
+    iptables -I FORWARD 1
+    -i {{ openstack_waf_transit_interface }}
+    -o {{ openstack_waf_app_interface }}
+    -s {{ openstack_db_flow_destination_ip }}/32
+    -d {{ openstack_db_flow_source_cidr }}
+    -p tcp --sport {{ openstack_db_flow_destination_port }}
+    -m conntrack --ctstate ESTABLISHED
+    -j LOG --log-prefix {{ openstack_db_response_flow_log_prefix | quote }} --log-level 6
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+    - openstack_db_flow_logging_enabled | default(false) | bool
+    - openstack_db_response_flow_log_check.rc == 1
+
 - name: Check OpenStack WAF forward rule to app net
   ansible.builtin.command: >-
     iptables -C FORWARD
@@ -149,6 +266,35 @@
     - openstack_waf_app_nat | default(false) | bool
     - openstack_waf_forward_from_app_check.rc == 1
 
+- name: Check OpenStack WAF app egress rules
+  ansible.builtin.command: >-
+    iptables -C FORWARD
+    -i {{ openstack_waf_app_interface }}
+    -o {{ openstack_waf_transit_interface }}
+    -s {{ openstack_app_cidr }}
+    -d {{ item }}
+    -j ACCEPT
+  loop: "{{ openstack_waf_app_egress_cidrs | default([aws_vpc_cidr, wireguard_cidr]) }}"
+  register: openstack_waf_app_egress_checks
+  changed_when: false
+  failed_when: openstack_waf_app_egress_checks.rc not in [0, 1]
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
+- name: Add OpenStack WAF app egress rules
+  ansible.builtin.command: >-
+    iptables -A FORWARD
+    -i {{ openstack_waf_app_interface }}
+    -o {{ openstack_waf_transit_interface }}
+    -s {{ openstack_app_cidr }}
+    -d {{ item.item }}
+    -j ACCEPT
+  loop: "{{ (openstack_waf_app_egress_checks.results | default([])) | selectattr('rc', 'equalto', 1) | list }}"
+  when:
+    - inventory_hostname in (groups['openstack_waf'] | default([]))
+    - openstack_waf_app_nat | default(false) | bool
+
 - name: Check OpenStack WAF app NAT rules
   ansible.builtin.command: >-
     iptables -t nat -C POSTROUTING
@@ -186,10 +332,21 @@
       #!/bin/bash
       set -e
       /usr/sbin/sysctl -w net.ipv4.ip_forward=1 >/dev/null
+      /usr/sbin/ip route replace default via {{ openstack_vpn_app_ip }} dev {{ openstack_waf_transit_interface }}
+      {% if openstack_db_flow_logging_enabled | default(false) | bool %}
+      /usr/sbin/iptables -C FORWARD -i {{ openstack_waf_app_interface }} -o {{ openstack_waf_transit_interface }} -s {{ openstack_db_flow_source_cidr }} -d {{ openstack_db_flow_destination_ip }}/32 -p tcp --dport {{ openstack_db_flow_destination_port }} -m conntrack --ctstate NEW -j LOG --log-prefix "{{ openstack_db_flow_log_prefix }}" --log-level 6 || \
+        /usr/sbin/iptables -I FORWARD 1 -i {{ openstack_waf_app_interface }} -o {{ openstack_waf_transit_interface }} -s {{ openstack_db_flow_source_cidr }} -d {{ openstack_db_flow_destination_ip }}/32 -p tcp --dport {{ openstack_db_flow_destination_port }} -m conntrack --ctstate NEW -j LOG --log-prefix "{{ openstack_db_flow_log_prefix }}" --log-level 6
+      /usr/sbin/iptables -C FORWARD -i {{ openstack_waf_transit_interface }} -o {{ openstack_waf_app_interface }} -s {{ openstack_db_flow_destination_ip }}/32 -d {{ openstack_db_flow_source_cidr }} -p tcp --sport {{ openstack_db_flow_destination_port }} -m conntrack --ctstate ESTABLISHED -j LOG --log-prefix "{{ openstack_db_response_flow_log_prefix }}" --log-level 6 || \
+        /usr/sbin/iptables -I FORWARD 1 -i {{ openstack_waf_transit_interface }} -o {{ openstack_waf_app_interface }} -s {{ openstack_db_flow_destination_ip }}/32 -d {{ openstack_db_flow_source_cidr }} -p tcp --sport {{ openstack_db_flow_destination_port }} -m conntrack --ctstate ESTABLISHED -j LOG --log-prefix "{{ openstack_db_response_flow_log_prefix }}" --log-level 6
+      {% endif %}
       /usr/sbin/iptables -C FORWARD -i {{ openstack_waf_transit_interface }} -o {{ openstack_waf_app_interface }} -d {{ openstack_app_cidr }} -j ACCEPT || \
         /usr/sbin/iptables -A FORWARD -i {{ openstack_waf_transit_interface }} -o {{ openstack_waf_app_interface }} -d {{ openstack_app_cidr }} -j ACCEPT
       /usr/sbin/iptables -C FORWARD -i {{ openstack_waf_app_interface }} -o {{ openstack_waf_transit_interface }} -s {{ openstack_app_cidr }} -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || \
         /usr/sbin/iptables -A FORWARD -i {{ openstack_waf_app_interface }} -o {{ openstack_waf_transit_interface }} -s {{ openstack_app_cidr }} -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+      {% for cidr in openstack_waf_app_egress_cidrs | default([aws_vpc_cidr, wireguard_cidr]) %}
+      /usr/sbin/iptables -C FORWARD -i {{ openstack_waf_app_interface }} -o {{ openstack_waf_transit_interface }} -s {{ openstack_app_cidr }} -d {{ cidr }} -j ACCEPT || \
+        /usr/sbin/iptables -A FORWARD -i {{ openstack_waf_app_interface }} -o {{ openstack_waf_transit_interface }} -s {{ openstack_app_cidr }} -d {{ cidr }} -j ACCEPT
+      {% endfor %}
       {% for cidr in openstack_waf_app_nat_source_cidrs %}
       /usr/sbin/iptables -t nat -C POSTROUTING -s {{ cidr }} -d {{ openstack_app_cidr }} -o {{ openstack_waf_app_interface }} -j MASQUERADE || \
         /usr/sbin/iptables -t nat -A POSTROUTING -s {{ cidr }} -d {{ openstack_app_cidr }} -o {{ openstack_waf_app_interface }} -j MASQUERADE
@@ -451,6 +608,8 @@
   ansible.builtin.command: "aws ecr get-login-password --region {{ waf_ecr_region | default('ap-southeast-1') }}"
   delegate_to: localhost
   become: false
+  environment:
+    AWS_PROFILE: "{{ waf_ecr_aws_profile | default(omit) }}"
   register: waf_ecr_controller_password
   changed_when: false
   no_log: true

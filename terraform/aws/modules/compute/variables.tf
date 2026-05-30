@@ -14,6 +14,10 @@ variable "app_sg_id" {
   type = string
 }
 
+variable "db_sg_id" {
+  type = string
+}
+
 variable "gateway_sg_id" {
   type = string
 }
@@ -30,6 +34,10 @@ variable "instance_type" {
   type = string
 }
 
+variable "db_instance_type" {
+  type = string
+}
+
 variable "vpn_node_name" {
   type = string
 }
@@ -39,6 +47,10 @@ variable "waf_node_name" {
 }
 
 variable "app_node_name" {
+  type = string
+}
+
+variable "db_node_name" {
   type = string
 }
 

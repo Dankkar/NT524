@@ -6,10 +6,12 @@ module "network" {
 }
 
 module "security_group" {
-  source                    = "./modules/security_group"
-  vpc_id                    = module.network.vpc_id
-  vpc_cidr_block            = module.network.vpc_cidr_block
-  openstack_vpn_public_cidr = var.openstack_vpn_public_cidr
+  source                     = "./modules/security_group"
+  vpc_id                     = module.network.vpc_id
+  vpc_cidr_block             = module.network.vpc_cidr_block
+  openstack_vpn_public_cidr  = var.openstack_vpn_public_cidr
+  openstack_app_cidr         = var.openstack_app_cidr
+  openstack_waf_transit_cidr = var.openstack_waf_transit_cidr
 }
 
 module "compute" {
@@ -18,13 +20,16 @@ module "compute" {
   waf_sg_id                = module.security_group.waf_sg_id
   vpn_sg_id                = module.security_group.vpn_sg_id
   app_sg_id                = module.security_group.app_sg_id
+  db_sg_id                 = module.security_group.db_sg_id
   gateway_sg_id            = module.security_group.gateway_sg_id
   public_key_path          = var.public_key_path
   keypair_name             = var.keypair_name
   instance_type            = var.instance_type
+  db_instance_type         = var.db_instance_type
   vpn_node_name            = var.vpn_node_name
   waf_node_name            = var.waf_node_name
   app_node_name            = var.app_node_name
+  db_node_name             = var.db_node_name
   gateway_node_name        = var.gateway_node_name
   waf_iam_instance_profile = aws_iam_instance_profile.waf_ec2.name
 }

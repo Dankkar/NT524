@@ -1,6 +1,6 @@
 ---
-- name: Deploy centralized PostgreSQL DB node
-  hosts: db_nodes
+- name: Deploy AWS PostgreSQL primary DB node
+  hosts: db_primary
   become: true
   gather_facts: true
   roles:

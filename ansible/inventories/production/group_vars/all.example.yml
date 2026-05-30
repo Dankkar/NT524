@@ -1,5 +1,7 @@
 ---
 aws_vpc_cidr: 172.31.0.0/16
+aws_db_private_ip: CHANGE_ME_AWS_DB_PRIVATE_IP
+openstack_app_private_ip: CHANGE_ME_OPENSTACK_APP_PRIVATE_IP
 openstack_app_cidr: 10.0.1.0/24
 openstack_vpn_app_ip: 10.0.2.254
 openstack_waf_transit_cidr: 10.0.2.0/24
@@ -25,6 +27,16 @@ openstack_waf_app_nat_source_cidrs:
   - "{{ openstack_waf_transit_cidr }}"
   - "{{ aws_vpc_cidr }}"
   - "{{ wireguard_cidr }}"
+openstack_waf_app_egress_cidrs:
+  - "{{ aws_vpc_cidr }}"
+  - "{{ wireguard_cidr }}"
+openstack_db_flow_logging_enabled: true
+openstack_db_flow_source_cidr: "{{ openstack_app_private_ip }}/32"
+openstack_db_flow_destination_ip: "{{ aws_db_private_ip }}"
+openstack_db_flow_destination_port: "{{ postgres_port }}"
+openstack_db_flow_log_path: /var/log/openstack-db-flow.log
+openstack_db_flow_log_prefix: "OPENSTACK_APP_TO_AWS_DB "
+openstack_db_response_flow_log_prefix: "AWS_DB_TO_OPENSTACK_APP "
 
 app_backend_host: CHANGE_ME_OPENSTACK_APP_PRIVATE_IP
 app_backend_port: 80
@@ -56,13 +68,19 @@ oauth2_proxy_email_domains:
 
 postgres_image: postgres:16-alpine
 postgres_container_name: hybrid-auth-postgres
-postgres_host: CHANGE_ME_OPENSTACK_DB_PRIVATE_IP
+postgres_host: "{{ aws_db_private_ip }}"
 postgres_port: 5432
 postgres_database: hybrid_auth
 postgres_username: hybrid_auth
 postgres_password: CHANGE_ME_POSTGRES_PASSWORD
 postgres_data_dir: /opt/hybrid-auth/postgres/data
-hybrid_app_database_url: "postgresql://{{ postgres_username }}:{{ postgres_password }}@{{ postgres_host }}:{{ postgres_port }}/{{ postgres_database }}"
+postgres_allowed_cidrs:
+  - "{{ aws_vpc_cidr }}"
+  - "{{ openstack_app_cidr }}"
+  - "{{ openstack_waf_transit_cidr }}"
+  - "{{ wireguard_cidr }}"
+hybrid_app_primary_database_url: "postgresql://{{ postgres_username }}:{{ postgres_password }}@{{ aws_db_private_ip }}:{{ postgres_port }}/{{ postgres_database }}"
+hybrid_app_database_url: "{{ hybrid_app_primary_database_url }}"
 
 nginx_server_name: _
 nginx_access_log: /var/log/nginx/access.log
@@ -91,6 +109,12 @@ filebeat_waf_inputs:
       - /var/log/syslog
     fields:
       log_type: syslog
+      node_role: waf
+  - id: openstack-db-flow
+    paths:
+      - "{{ openstack_db_flow_log_path }}"
+    fields:
+      log_type: db_flow
       node_role: waf
 
 filebeat_app_inputs:

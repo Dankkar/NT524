@@ -100,32 +100,6 @@ resource "openstack_compute_instance_v2" "waf_node" {
                 EOF
 }
 
-resource "openstack_compute_instance_v2" "db_node" {
-  name            = var.db_node_name
-  image_name      = var.image_name
-  flavor_name     = var.flavor_name
-  key_pair        = openstack_compute_keypair_v2.openstack_key.name
-  security_groups = [var.db_sg_name]
-
-  network {
-    uuid = var.app_network_id
-  }
-
-  depends_on = [openstack_compute_instance_v2.vpn_gateway, openstack_compute_instance_v2.waf_node]
-
-  user_data = <<-EOF
-                #!/bin/bash
-                sleep 30
-                ip route del 8.8.8.8 || true
-                ip route del 8.8.4.4 || true
-
-                ip route del default || true
-                ip route add default via ${var.vpn_app_ip}
-
-                echo "nameserver 8.8.8.8" > /etc/resolv.conf
-                EOF
-}
-
 resource "openstack_networking_port_v2" "vpn_waf_port" {
   name               = "${var.vpn_node_name}_waf_port"
   network_id         = var.waf_network_id

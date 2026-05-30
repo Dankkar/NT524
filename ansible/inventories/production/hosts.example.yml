@@ -59,13 +59,18 @@ all:
           ansible_host: CHANGE_ME_AWS_APP_PUBLIC_IP
           ansible_user: ubuntu
           aws_app_private_ip: CHANGE_ME_AWS_APP_PRIVATE_IP
+          postgres_host: "{{ aws_db_private_ip }}"
+          hybrid_app_database_url: "{{ hybrid_app_primary_database_url }}"
         openstack-app:
           ansible_host: CHANGE_ME_OPENSTACK_APP_PRIVATE_IP
           ansible_user: ubuntu
           ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand='ssh -i ~/.ssh/openstack_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_OPENSTACK_VPN_FLOATING_IP'"
     db_nodes:
-      hosts:
-        openstack-db:
-          ansible_host: CHANGE_ME_OPENSTACK_DB_PRIVATE_IP
-          ansible_user: ubuntu
-          ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand='ssh -i ~/.ssh/openstack_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_OPENSTACK_VPN_FLOATING_IP'"
+      children:
+        db_primary:
+          hosts:
+            aws-db:
+              ansible_host: CHANGE_ME_AWS_DB_PRIVATE_IP
+              ansible_user: ubuntu
+              postgres_host: "{{ aws_db_private_ip }}"
+              ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand='ssh -i ~/.ssh/aws_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@CHANGE_ME_AWS_GATEWAY_PUBLIC_IP'"

@@ -21,7 +21,3 @@ output "waf_sg_id" {
 output "waf_sg_name" {
   value = openstack_networking_secgroup_v2.waf_sg.name
 }
-
-output "db_sg_name" {
-  value = openstack_networking_secgroup_v2.db_sg.name
-}

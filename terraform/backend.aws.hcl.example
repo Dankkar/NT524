@@ -1,0 +1,5 @@
+bucket         = "nt524-terraform-state-211116632423-ap-southeast-1"
+key            = "aws/terraform.tfstate"
+region         = "ap-southeast-1"
+dynamodb_table = "nt524-terraform-locks"
+encrypt        = true

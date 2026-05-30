@@ -4,6 +4,30 @@ variable "aws_region" {
   default     = "ap-southeast-1"
 }
 
+variable "aws_profile" {
+  type        = string
+  description = "Local AWS CLI profile used to manage the existing AWS account. Leave empty to use the default credential chain."
+  default     = ""
+}
+
+variable "terraform_state_backend_enabled" {
+  type        = bool
+  description = "Create S3 and DynamoDB resources used as a shared Terraform remote state backend."
+  default     = true
+}
+
+variable "terraform_state_bucket_name" {
+  type        = string
+  description = "S3 bucket name for shared Terraform state. Leave empty to derive nt524-terraform-state-<account>-<region>."
+  default     = ""
+}
+
+variable "terraform_lock_table_name" {
+  type        = string
+  description = "DynamoDB table name for Terraform state locking."
+  default     = "nt524-terraform-locks"
+}
+
 variable "vpc_id" {
   type        = string
   description = "Existing AWS VPC ID in the selected region, for example vpc-0123456789abcdef0."
@@ -74,6 +98,12 @@ variable "instance_type" {
   default     = "t3.micro"
 }
 
+variable "db_instance_type" {
+  type        = string
+  description = "EC2 instance type for the dedicated AWS PostgreSQL DB node."
+  default     = "t2.nano"
+}
+
 variable "vpn_node_name" {
   type        = string
   description = "Name tag for the AWS VPN node"
@@ -90,6 +120,12 @@ variable "app_node_name" {
   type        = string
   description = "Name tag for the AWS app node"
   default     = "aws-app-node"
+}
+
+variable "db_node_name" {
+  type        = string
+  description = "Name tag for the AWS PostgreSQL primary DB node"
+  default     = "aws-db-node"
 }
 
 variable "gateway_node_name" {

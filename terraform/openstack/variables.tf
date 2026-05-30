@@ -123,18 +123,6 @@ variable "waf_transit_ip" {
   default     = "10.0.2.10"
 }
 
-variable "db_node_name" {
-  description = "Name of the centralized Database Node instance"
-  type        = string
-  default     = "db-node"
-}
-
-variable "db_allowed_cidrs" {
-  description = "CIDR ranges allowed to reach PostgreSQL on the centralized DB node"
-  type        = list(string)
-  default     = ["10.0.1.0/24", "10.0.2.0/24", "172.31.0.0/16", "10.200.0.0/24"]
-}
-
 variable "router_name" {
   description = "Name of the OpenStack Router"
   type        = string
